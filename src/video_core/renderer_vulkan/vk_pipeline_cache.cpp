@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <ranges>
 #include <cstdlib>
 #include <cstring>
@@ -184,6 +185,42 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
                                (stencil_ref_export_enable << 1) |
                                (regs.depth_shader_control.mask_export_enable << 2) |
                                (regs.depth_shader_control.coverage_to_mask_enable << 3);
+        const u32 sample_bits = (1u << (1u << regs.aa_config.msaa_num_samples)) - 1u;
+        std::array<u16, 4> aa_mask;
+        for (u32 pixel = 0; pixel < 4; ++pixel) {
+            aa_mask[pixel] = regs.aa_mask.pixel[pixel] & sample_bits;
+        }
+        info.hw.fs.aa_mask_per_pixel =
+            !std::ranges::all_of(aa_mask, [&](u16 mask) { return mask == aa_mask[0]; });
+        if (info.hw.fs.aa_mask_per_pixel) {
+            info.hw.fs.aa_mask = aa_mask;
+        }
+        const auto mrt0_export_format = regs.color_export_format.GetFormat(0);
+        const bool mrt0_alpha = mrt0_export_format >= AmdGpu::ShaderExportFormat::AR_32 &&
+                                mrt0_export_format <= AmdGpu::ShaderExportFormat::ABGR_32;
+        info.hw.fs.alpha_to_mask_enable =
+            regs.alpha_to_mask.enable && !regs.depth_shader_control.alpha_to_mask_disable &&
+            mrt0_alpha &&
+            (regs.color_shader_mask.GetMask(0) & AmdGpu::ColorBufferMask::ComponentA) != 0;
+        info.hw.fs.coverage_to_mask_enable = regs.depth_shader_control.coverage_to_mask_enable;
+        if (info.hw.fs.alpha_to_mask_enable || info.hw.fs.coverage_to_mask_enable ||
+            regs.depth_shader_control.mask_export_enable) {
+            info.hw.fs.msaa_num_samples = regs.aa_config.msaa_num_samples;
+        }
+        if (regs.depth_shader_control.mask_export_enable) {
+            info.hw.fs.mask_export_num_samples = regs.depth_eqaa.mask_export_num_samples;
+        }
+        if (info.hw.fs.alpha_to_mask_enable || info.hw.fs.coverage_to_mask_enable) {
+            info.hw.fs.alpha_to_mask_num_samples =
+                std::min<u32>(regs.depth_eqaa.alpha_to_mask_num_samples, 4);
+            info.hw.fs.alpha_to_mask_eqaa_disable = regs.depth_eqaa.alpha_to_mask_eqaa_disable;
+            u32 offsets = 0;
+            for (u32 pixel = 0; pixel < 4; ++pixel) {
+                offsets |= regs.alpha_to_mask.Offset(pixel) << (3 * pixel);
+            }
+            info.hw.fs.alpha_to_mask_offsets = offsets;
+            info.hw.fs.mrt0_export_format = mrt0_export_format;
+        }
         const auto& cb0_blend = regs.blend_control[0];
         if (cb0_blend.enable) {
             info.hw.fs.dual_source_blending =
@@ -257,6 +294,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
         info.sw.vs.step_rate_1 = regs.vgt_instance_step_rate_1;
         info.sw.vs.vertex_sgpr_offset = draw_indirect_params.vertex_sgpr_offset;
         info.sw.vs.instance_sgpr_offset = draw_indirect_params.instance_sgpr_offset;
+        info.sw.vs.is_indirect = draw_indirect_params.is_indirect;
         info.sw.vs.tess_emulated_primitive =
             regs.primitive_type == AmdGpu::PrimitiveType::RectList ||
             regs.primitive_type == AmdGpu::PrimitiveType::QuadList;
@@ -322,6 +360,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_buffer_fp32_atomic_min_max =
             instance_.IsShaderAtomicFloatBuffer32MinMaxSupported(),
         .supports_image_fp32_atomic_min_max = instance_.IsShaderAtomicFloatImage32MinMaxSupported(),
+        .supports_shared_fp32_atomic_min_max =
+            instance_.IsShaderAtomicFloatShared32MinMaxSupported(),
         .supports_buffer_int64_atomics = instance_.IsBufferInt64AtomicsSupported(),
         .supports_shared_int64_atomics = instance_.IsSharedInt64AtomicsSupported(),
         .supports_workgroup_explicit_memory_layout =
@@ -338,6 +378,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
+        .fast_shader_math = EmulatorSettings.IsFastShaderMath(),
+        .support_bda = instance_.IsBufferDeviceAddressSupported(),
     };
 
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
@@ -431,6 +473,10 @@ bool PipelineCache::RefreshGraphicsKey() {
     key.logic_op = regs.color_control.rop3;
     key.depth_samples = db_enabled ? regs.depth_buffer.NumSamples() : 1;
     key.num_samples = key.depth_samples;
+    key.sample_mask = 0;
+    for (const u16 pixel_mask : regs.aa_mask.pixel) {
+        key.sample_mask |= pixel_mask;
+    }
     key.cb_shader_mask = regs.color_shader_mask;
 
     const bool skip_cb_binding =
@@ -439,7 +485,8 @@ bool PipelineCache::RefreshGraphicsKey() {
     // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        if (!col_buf || !regs.color_target_mask.GetMask(cb)) {
+        if (!col_buf ||
+            !(regs.color_target_mask.GetMask(cb) & regs.color_shader_mask.GetMask(cb))) {
             // No attachment bound or writing to it is disabled.
             continue;
         }
@@ -471,7 +518,8 @@ bool PipelineCache::RefreshGraphicsKey() {
     bool all_color_samples_same = true;
     for (s32 cb = 0; cb < key.num_color_attachments && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        const u32 target_mask = regs.color_target_mask.GetMask(cb);
+        const u32 target_mask =
+            regs.color_target_mask.GetMask(cb) & regs.color_shader_mask.GetMask(cb);
         if (!col_buf || !target_mask) {
             continue;
         }

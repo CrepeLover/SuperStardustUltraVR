@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -55,6 +55,9 @@ static bool IgnoresExecMask(const GcnInst& inst) {
         return true;
     default:
         break;
+    }
+    if (inst.category == InstCategory::Export && inst.control.exp.vm) {
+        return true;
     }
     // Read/Write Lane instructions are not affected either.
     switch (inst.opcode) {
@@ -323,6 +326,7 @@ void CFG::LinkBlocks() {
         // need to link with the next block.
         if (!end_inst.IsTerminateInstruction()) {
             auto* next_block = get_block(block.end);
+            block.cond = IR::Condition::True;
             block.branch_true = next_block;
             block.end_class = EndClass::Branch;
             next_block->num_predecessors++;

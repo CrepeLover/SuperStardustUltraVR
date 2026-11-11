@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/alignment.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -166,7 +167,11 @@ bool Runtime::Transit(VideoCore::Image* image, vk::ImageLayout dst_layout,
                       vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,
                       std::optional<VideoCore::SubresourceRange> subres_range) {
     const size_t prev_num_barriers = static_cast<size_t>(image_barriers.size());
-    image->GetBarriers(image_barriers, dst_layout, dst_access, dst_stage, subres_range);
+    if (dst_access & vk::AccessFlagBits2::eTransferWrite) {
+        image->InvalidateSubrects();
+    }
+    image->GetBarriers(image_barriers, *image->backing, dst_layout, dst_access, dst_stage,
+                       subres_range);
     return image_barriers.size() != prev_num_barriers;
 }
 
@@ -324,11 +329,55 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
+VideoCore::ImageView& Runtime::FindSubrectView(VideoCore::Image& image,
+                                               const VideoCore::ImageInfo& info,
+                                               const VideoCore::ImageViewInfo& view_info) {
+    ASSERT(info.IsSubrectOf(image.info));
+    SetBackingSamples(&image, info.num_samples);
+
+    auto create_info = image.backing->image.image_ci;
+    create_info.extent = vk::Extent3D{info.size.width, info.size.height, 1};
+    auto it = std::ranges::find_if(image.backing_images, [&](const auto& backing) {
+        return backing.image.image_ci.extent == create_info.extent &&
+               backing.num_samples == info.num_samples;
+    });
+    auto& crop =
+        it != image.backing_images.end() ? *it : image.AddBacking(create_info, info.num_samples);
+    if (!crop.subrect_valid) {
+        scheduler.EndRendering();
+        const auto source_state = image.backing->state;
+        Transit(&image, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eCopy,
+                vk::AccessFlagBits2::eTransferRead);
+        image.GetBarriers(image_barriers, crop, vk::ImageLayout::eTransferDstOptimal,
+                          vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eCopy);
+        FlushBarriers();
+
+        const vk::ImageCopy copy{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .extent = create_info.extent,
+        };
+        scheduler.CommandBuffer().copyImage(image.GetImage(), vk::ImageLayout::eTransferSrcOptimal,
+                                            crop.image, vk::ImageLayout::eTransferDstOptimal, copy);
+
+        // A full-size view can already be bound in the same draw.
+        if (image.binding.is_bound && source_state.layout != vk::ImageLayout::eUndefined) {
+            Transit(&image, source_state.layout, source_state.pl_stage, source_state.access_mask);
+        }
+        image.GetBarriers(image_barriers, crop, vk::ImageLayout::eShaderReadOnlyOptimal,
+                          vk::AccessFlagBits2::eShaderRead,
+                          vk::PipelineStageFlagBits2::eAllCommands);
+        FlushBarriers();
+        crop.subrect_valid = true;
+    }
+
+    return image.FindView(view_info, crop);
+}
+
 void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                                   const VideoCore::Buffer* buffer, u64 offset) {
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
-    ASSERT(num_mips == 1);
 
     SetBackingSamples(dst, dst->info.num_samples, false);
     SetBackingSamples(src, src->info.num_samples);
@@ -346,7 +395,20 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
         .imageOffset = {0, 0, 0},
         .imageExtent = {src->info.size.width, src->info.size.height, src->info.size.depth},
     };
-    const auto copy_size = BufferImageCopySize(buffer_copy, src->info.pixel_format);
+    u64 copy_size = BufferImageCopySize(buffer_copy, src->info.pixel_format);
+    SmallVector<vk::BufferImageCopy, 8> buffer_copies;
+    buffer_copies.push_back(buffer_copy);
+    for (u32 mip = 1; mip < num_mips; ++mip) {
+        auto mip_copy = buffer_copy;
+        mip_copy.bufferOffset = Common::AlignUp(offset + copy_size, 16);
+        mip_copy.imageSubresource.mipLevel = mip;
+        mip_copy.imageExtent = vk::Extent3D{std::max(src->info.size.width >> mip, 1u),
+                                            std::max(src->info.size.height >> mip, 1u),
+                                            std::max(src->info.size.depth >> mip, 1u)};
+        copy_size =
+            mip_copy.bufferOffset - offset + BufferImageCopySize(mip_copy, src->info.pixel_format);
+        buffer_copies.push_back(mip_copy);
+    }
 
     scheduler.EndRendering();
 
@@ -362,7 +424,7 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
 
     auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.copyImageToBuffer(src->GetImage(), vk::ImageLayout::eTransferSrcOptimal,
-                             buffer->Handle(), buffer_copy);
+                             buffer->Handle(), buffer_copies);
 
     const vk::MemoryBarrier2 post_copy_barrier = {
         .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
@@ -376,9 +438,11 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
         .pMemoryBarriers = &post_copy_barrier,
     });
 
-    buffer_copy.imageSubresource.aspectMask = dst->TransferAspect();
+    for (auto& copy : buffer_copies) {
+        copy.imageSubresource.aspectMask = dst->TransferAspect();
+    }
     cmdbuf.copyBufferToImage(buffer->Handle(), dst->GetImage(),
-                             vk::ImageLayout::eTransferDstOptimal, buffer_copy);
+                             vk::ImageLayout::eTransferDstOptimal, buffer_copies);
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);
     dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
@@ -463,9 +527,10 @@ void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
             FlushBarriers();
         }
 
+        const u32 actual_dst_samples = static_cast<u32>(dst->backing->image.image_ci.samples);
         blit_helper->ReinterpretColorAsMsDepth(
-            dst->info.size.width, dst->info.size.height, dst->info.num_samples,
-            src->info.pixel_format, dst->info.pixel_format, src->GetImage(), dst->GetImage());
+            dst->info.size.width, dst->info.size.height, actual_dst_samples, src->info.pixel_format,
+            dst->info.pixel_format, src->GetImage(), dst->GetImage());
     } else {
         LOG_WARNING(Render_Vulkan, "Unimplemented depth overlap copy");
     }
@@ -613,16 +678,14 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     }
     ASSERT_MSG(!image->info.props.is_depth, "Swapping samples is only valid for color images");
     VideoCore::Image::BackingImage* new_backing;
-    auto it = std::ranges::find(backing_images, num_samples,
-                                &VideoCore::Image::BackingImage::num_samples);
+    const auto extent = backing->image.image_ci.extent;
+    auto it = std::ranges::find_if(backing_images, [&](const auto& candidate) {
+        return candidate.num_samples == num_samples && candidate.image.image_ci.extent == extent;
+    });
     if (it == backing_images.end()) {
         auto new_image_ci = backing->image.image_ci;
         new_image_ci.samples = LiverpoolToVK::NumSamples(num_samples, image->supported_samples);
-
-        new_backing = &backing_images.emplace_back();
-        new_backing->num_samples = num_samples;
-        new_backing->image = VideoCore::UniqueImage{instance.GetDevice(), instance.GetAllocator()};
-        new_backing->image.Create(new_image_ci);
+        new_backing = &image->AddBacking(new_image_ci, num_samples);
 
         Vulkan::SetObjectName(instance.GetDevice(), new_backing->image.image,
                               "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{} (backing)",
@@ -668,9 +731,11 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
         FlushBarriers();
 
         // Copy between ms and non ms backing images
-        blit_helper->CopyBetweenMsImages(
-            info.size.width, info.size.height, new_backing->num_samples, info.pixel_format,
-            backing->num_samples > 1, backing->image, new_backing->image);
+        const u32 actual_dst_samples = static_cast<u32>(new_backing->image.image_ci.samples);
+        const bool actual_src_msaa = backing->image.image_ci.samples != vk::SampleCountFlagBits::e1;
+        blit_helper->CopyBetweenMsImages(info.size.width, info.size.height, actual_dst_samples,
+                                         info.pixel_format, actual_src_msaa, backing->image,
+                                         new_backing->image);
 
         // Update current layout in tracker to new backings layout
         new_backing->last_shader_read_range.reset();
@@ -679,6 +744,7 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
         new_backing->state.pl_stage = dst_stage;
     }
 
+    image->InvalidateSubrects();
     backing = new_backing;
 }
 

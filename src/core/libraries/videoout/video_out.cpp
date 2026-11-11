@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <fmt/format.h>
 
 #include "common/assert.h"
 #include "common/elf_info.h"

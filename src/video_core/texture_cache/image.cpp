@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <memory>
+#include "common/alignment.h"
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -103,7 +104,7 @@ void UniqueImage::Destroy() {
 void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     this->image_ci = image_ci;
     ASSERT(!image);
-    const VmaAllocationCreateInfo alloc_ci = {
+    VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .requiredFlags = 0,
@@ -117,6 +118,13 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+        LOG_WARNING(Render_Vulkan, "Allocating image of size {} bytes over budget.",
+                    alloc_info.size);
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
+                                &alloc_info);
+    }
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};
@@ -189,10 +197,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
 
-    backing = &backing_images.emplace_back();
-    backing->num_samples = info.num_samples;
-    backing->image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
-    backing->image.Create(image_ci);
+    backing = &AddBacking(image_ci, info.num_samples);
 
     Vulkan::SetObjectName(instance.GetDevice(), GetImage(),
                           "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{}", info.size.width,
@@ -203,27 +208,48 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
 Image::~Image() = default;
 
+Image::BackingImage& Image::AddBacking(const vk::ImageCreateInfo& create_info, u32 num_samples) {
+    const auto previous_size = memory_usage_counter ? Common::AlignUp(SizeBytes(), 1024) : 0;
+    const size_t backing_index = backing ? backing - backing_images.data() : 0;
+    auto& added_backing = backing_images.emplace_back();
+    backing = &backing_images[backing_index];
+
+    const auto& instance = runtime->GetInstance();
+    added_backing.num_samples = num_samples;
+    added_backing.image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
+    added_backing.image.Create(create_info);
+    if (memory_usage_counter) {
+        *memory_usage_counter += Common::AlignUp(SizeBytes(), 1024) - previous_size;
+    }
+    return added_backing;
+}
+
 ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_samples) {
     if (ensure_guest_samples && backing->num_samples > 1 != info.num_samples > 1) {
         runtime->SetBackingSamples(this, info.num_samples);
     }
-    const auto& view_infos = backing->image_view_infos;
+    return FindView(view_info, *backing);
+}
+
+ImageView& Image::FindView(const ImageViewInfo& view_info, BackingImage& view_backing) {
+    const auto& view_infos = view_backing.image_view_infos;
     const auto it = std::ranges::find(view_infos, view_info);
     if (it != view_infos.end()) {
-        const auto view_id = backing->image_view_ids[std::distance(view_infos.begin(), it)];
+        const auto view_id = view_backing.image_view_ids[std::distance(view_infos.begin(), it)];
         return (*slot_image_views)[view_id];
     }
-    const auto view_id = slot_image_views->Insert(runtime->GetInstance(), view_info, *this);
-    backing->image_view_infos.emplace_back(view_info);
-    backing->image_view_ids.emplace_back(view_id);
+    const auto view_id = slot_image_views->Insert(runtime->GetInstance(), view_info, *this,
+                                                  view_backing.image.image);
+    view_backing.image_view_infos.emplace_back(view_info);
+    view_backing.image_view_ids.emplace_back(view_id);
     return (*slot_image_views)[view_id];
 }
 
-void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
-                        vk::PipelineStageFlags2 dst_stage,
+void Image::GetBarriers(Barriers& barriers, BackingImage& image_backing, vk::ImageLayout dst_layout,
+                        vk::AccessFlags2 dst_mask, vk::PipelineStageFlags2 dst_stage,
                         std::optional<SubresourceRange> subres_range) {
-    auto& last_state = backing->state;
-    auto& subresource_states = backing->subresource_states;
+    auto& last_state = image_backing.state;
+    auto& subresource_states = image_backing.subresource_states;
 
     const bool needs_partial_transition =
         subres_range &&
@@ -231,12 +257,12 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
     const bool partially_transited = !subresource_states.empty();
     const bool cache_shader_read =
         needs_partial_transition && dst_mask == vk::AccessFlagBits2::eShaderRead;
-    if (cache_shader_read && backing->last_shader_read_range == subres_range &&
+    if (cache_shader_read && image_backing.last_shader_read_range == subres_range &&
         last_state.layout == dst_layout && last_state.access_mask == dst_mask &&
         last_state.pl_stage == dst_stage) {
         return;
     }
-    backing->last_shader_read_range.reset();
+    image_backing.last_shader_read_range.reset();
 
     if (needs_partial_transition || partially_transited) {
         if (!partially_transited) {
@@ -277,7 +303,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                         .newLayout = dst_layout,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = GetImage(),
+                        .image = image_backing.image.image,
                         .subresourceRange{
                             .aspectMask = aspect_mask,
                             .baseMipLevel = mip,
@@ -313,7 +339,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
             .newLayout = dst_layout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = GetImage(),
+            .image = image_backing.image.image,
             .subresourceRange{
                 .aspectMask = aspect_mask,
                 .baseMipLevel = 0,
@@ -328,7 +354,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
     last_state.access_mask = dst_mask;
     last_state.pl_stage = dst_stage;
     if (cache_shader_read) {
-        backing->last_shader_read_range = subres_range;
+        image_backing.last_shader_read_range = subres_range;
     }
 }
 

@@ -361,6 +361,7 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
         }
     case SIGFPE:
     case SIGTRAP:
+    case SIGABRT:
     case SIGSYS: {
         if (thread && thread->DispatchSignal(NativeToOrbisSignal(sig), info_p, context_p)) {
             return;
@@ -407,9 +408,10 @@ SignalDispatch::SignalDispatch() {
 
     ASSERT_MSG(
         sigaction(SIGSEGV, &action, nullptr) == 0 && sigaction(SIGBUS, &action, nullptr) == 0 &&
-            sigaction(SIGILL, &action, nullptr) == 0 && sigaction(SIGFPE, &action, nullptr) == 0 &&
+            sigaction(SIGILL, &action, nullptr) == 0 && sigaction(SIGABRT, &action, nullptr) == 0 &&
             sigaction(SIGTRAP, &action, nullptr) == 0 && sigaction(SIGSYS, &action, nullptr) == 0 &&
-            sigaction(SIGUSR1, &action, nullptr) == 0 && sigaction(SIGSLEEP, &action, nullptr) == 0,
+            sigaction(SIGUSR1, &action, nullptr) == 0 && sigaction(SIGFPE, &action, nullptr) == 0 &&
+            sigaction(SIGSLEEP, &action, nullptr) == 0,
         "Failed to register signal handlers.");
 #endif
 }
@@ -431,7 +433,7 @@ void SignalDispatch::RemoveHandlers() {
     if (!(sigaction(SIGSEGV, &action, nullptr) == 0 && sigaction(SIGBUS, &action, nullptr) == 0 &&
           sigaction(SIGILL, &action, nullptr) == 0 && sigaction(SIGFPE, &action, nullptr) == 0 &&
           sigaction(SIGTRAP, &action, nullptr) == 0 && sigaction(SIGSYS, &action, nullptr) == 0 &&
-          sigaction(SIGUSR1, &action, nullptr) == 0 &&
+          sigaction(SIGUSR1, &action, nullptr) == 0 && sigaction(SIGABRT, &action, nullptr) == 0 &&
           sigaction(SIGSLEEP, &action, nullptr) == 0)) {
         LOG_CRITICAL(Core, "Failed to remove signal handlers.");
         std::quick_exit(1);

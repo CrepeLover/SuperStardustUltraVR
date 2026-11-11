@@ -4,13 +4,18 @@
 #pragma once
 
 #include <mutex>
+#include <optional>
+#include <thread>
+#include <unordered_set>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <boost/container/small_vector.hpp>
+#include <queue>
+#include <tsl/robin_map.h>
 
 #include "common/lru_cache.h"
 #include "common/multi_level_page_table.h"
 #include "common/slot_vector.h"
-#include "common/unique_function.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/texture_cache/blit_helper.h"
 #include "video_core/texture_cache/image.h"
@@ -74,10 +79,21 @@ public:
         VideoOut,
     };
 
+    enum class DownloadMemoryFlags : u32 {
+        None = 0,
+        Sync = 1 << 0,
+        Priority = 1 << 1,
+        DiscardBufferCache = 1 << 2,
+    };
+
     struct ImageDesc {
         ImageInfo info;
         ImageViewInfo view_info;
         BindingType type{BindingType::Texture};
+
+        bool IsSubrectTexture(const ImageInfo& source) const {
+            return type == BindingType::Texture && info.IsSubrectOf(source);
+        }
 
         ImageDesc() = default;
         ImageDesc(const AmdGpu::Image& image, const Shader::ImageResource& desc)
@@ -98,7 +114,7 @@ public:
 public:
     TextureCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                  Vulkan::Runtime& runtime, AmdGpu::Liverpool* liverpool, BufferCache& buffer_cache,
-                 PageManager& tracker);
+                 PageManager& page_manager);
     ~TextureCache();
 
     TileManager& GetTileManager() noexcept {
@@ -110,6 +126,9 @@ public:
 
     /// Marks an image as dirty if it exists at the provided address.
     void InvalidateMemoryFromGPU(VAddr address, size_t max_size);
+
+    /// Marks all images as maybe GPU dirty within the provided range.
+    void MarkAsMaybeGpuDirty(VAddr addr, size_t size);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
@@ -198,6 +217,31 @@ public:
         FMask,
         HTile,
     };
+
+    struct MetaDataInfo {
+        MetaType type;
+        ImageId owner_id{};
+        u64 owner_uid{};
+        u32 num_samples = 1;
+        s32 clear_mask = -1;
+    };
+
+    /// Returns metadata information if the specified address belongs to a live image.
+    std::optional<MetaDataInfo> GetMetaInfo(VAddr address) const {
+        const auto it = surface_metas.find(address);
+        if (it == surface_metas.end()) {
+            return std::nullopt;
+        }
+        const auto& meta = it->second;
+        if (!meta.owner_id || !slot_images.IsAllocated(meta.owner_id)) {
+            return std::nullopt;
+        }
+        const auto& owner = slot_images[meta.owner_id];
+        if (owner.image_uid != meta.owner_uid || False(owner.flags & ImageFlagBits::Registered)) {
+            return std::nullopt;
+        }
+        return meta;
+    }
 
     /// Returns meta type if the specified address is a metadata surface.
     std::optional<MetaType> IsMeta(VAddr address) const {
@@ -313,8 +357,9 @@ private:
     }
 
     /// Copies image memory back to CPU.
-    void DownloadImageMemory(ImageId image_id, bool sync = false);
-    Common::UniqueFunction<void> QueueImageDownload(ImageId image_id, bool deferred, u64& bytes);
+    /// Returns the number of bytes queued for guest memory, 0 if the image has no GPU data.
+    u32 DownloadImageMemory(ImageId image_id,
+                            DownloadMemoryFlags flags = DownloadMemoryFlags::None);
 
     /// Register image in the page table
     void RegisterImage(ImageId image);
@@ -330,15 +375,19 @@ private:
     void UntrackImageHead(ImageId image_id);
     void UntrackImageTail(ImageId image_id);
 
+    /// Marks the image CPU dirty if the guest wrote to its untracked head or tail page.
+    void MarkDirtyIfEdgesModified(Image& image);
+
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
+
+    void RegisterMeta(VAddr address, MetaDataInfo info);
+    void UnregisterMeta(VAddr address, u64 owner_uid);
 
     /// Removes the image and any views/surface metas that reference it.
     void DeleteImage(ImageId image_id);
 
     /// Touch the image in the LRU cache.
-    void TouchImage(Image& image) {
-        image_lru_cache.Touch(image, gc_tick);
-    }
+    void TouchImage(Image& image);
 
     /// Removes image from the cache and schedules it for deletion.
     void FreeImage(ImageId image_id) {
@@ -359,7 +408,7 @@ private:
     Vulkan::Runtime& runtime;
     AmdGpu::Liverpool* liverpool;
     BufferCache& buffer_cache;
-    PageManager& tracker;
+    PageManager& page_manager;
     PageTable page_table;
     Common::SlotVector<Image> slot_images;
     Common::SlotVector<ImageView> slot_image_views;
@@ -381,11 +430,8 @@ private:
     Common::LRUCache<Sampler> sampler_lru_cache;
     const bool readback_linear_images;
     std::mutex download_images_mutex;
-    struct MetaDataInfo {
-        MetaType type;
-        s32 clear_mask = -1;
-    };
     absl::flat_hash_map<VAddr, MetaDataInfo> surface_metas;
 };
+DECLARE_ENUM_FLAG_OPERATORS(TextureCache::DownloadMemoryFlags)
 
 } // namespace VideoCore

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <source_location>
@@ -433,6 +434,7 @@ public:
     /// Will be run when submitting or calling PopPendingOperations.
     void DeferOperation(Common::UniqueFunction<void>&& func) {
         std::unique_lock lk(pending_ops_mutex);
+        pending_ops_empty.store(false, std::memory_order_relaxed);
         pending_ops.emplace(std::move(func), CurrentTick());
     }
 
@@ -473,6 +475,7 @@ private:
         u64 gpu_tick;
     };
     std::queue<PendingOp> pending_ops;
+    std::atomic<bool> pending_ops_empty{true};
     std::recursive_mutex pending_ops_mutex;
     std::queue<PendingOp> priority_pending_ops;
     std::mutex priority_pending_ops_mutex;

@@ -183,6 +183,9 @@ void Scheduler::Wait(u64 tick, std::source_location caller) {
 }
 
 void Scheduler::PopPendingOperations() {
+    if (pending_ops_empty.load(std::memory_order_relaxed)) {
+        return;
+    }
     std::unique_lock lk(pending_ops_mutex);
     if (pending_ops.empty()) {
         return;
@@ -198,6 +201,7 @@ void Scheduler::PopPendingOperations() {
         pending_ops.front().callback();
         pending_ops.pop();
     }
+    pending_ops_empty.store(pending_ops.empty(), std::memory_order_relaxed);
 }
 
 void Scheduler::BeginSession() {

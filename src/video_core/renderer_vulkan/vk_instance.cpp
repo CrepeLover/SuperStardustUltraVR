@@ -1,5 +1,4 @@
-#include "core/vr/openxr_host.h"
-// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <boost/container/static_vector.hpp>
@@ -9,8 +8,10 @@
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/types.h"
+#include "core/vr/openxr_host.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
+#include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -96,8 +97,8 @@ Instance::Instance(bool enable_validation, bool enable_crash_diagnostic)
 
 Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
                    bool enable_validation /*= false*/, bool enable_crash_diagnostic /*= false*/)
-    : instance{CreateInstance(window.GetWindowInfo().type, enable_validation,
-                              enable_crash_diagnostic)},
+    : instance{
+          CreateInstance(window.GetWindowInfo().type, enable_validation, enable_crash_diagnostic)},
       physical_devices{EnumeratePhysicalDevices(instance)} {
     if (enable_validation) {
         debug_callback = CreateDebugCallback(*instance);
@@ -185,6 +186,15 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     properties = physical_device.getProperties();
     memory_properties = physical_device.getMemoryProperties();
     CollectDeviceParameters();
+    if (properties.apiVersion >= VK_API_VERSION_1_2 &&
+        properties.apiVersion < TargetVulkanApiVersion && VideoCore::IsRenderDocLoaded()) {
+        // RenderDoc reports Vulkan 1.2 on drivers without bufferDeviceAddressCaptureReplay, but
+        // still forwards the device setup to the driver, so Vulkan 1.3 features keep working.
+        LOG_WARNING(Render_Vulkan, "RenderDoc limited this device to Vulkan {}.{}",
+                    VK_VERSION_MAJOR(properties.apiVersion),
+                    VK_VERSION_MINOR(properties.apiVersion));
+        properties.apiVersion = TargetVulkanApiVersion;
+    }
     ASSERT_MSG(properties.apiVersion >= TargetVulkanApiVersion,
                "Vulkan {}.{} is required, but only {}.{} is supported by device!",
                VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
@@ -346,6 +356,8 @@ bool Instance::CreateDevice() {
                  shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax);
         LOG_INFO(Render_Vulkan, "- shaderImageFloat32AtomicMinMax: {}",
                  shader_atomic_float2_features.shaderImageFloat32AtomicMinMax);
+        LOG_INFO(Render_Vulkan, "- shaderSharedFloat32AtomicMinMax: {}",
+                 shader_atomic_float2_features.shaderSharedFloat32AtomicMinMax);
     }
     workgroup_memory_explicit_layout =
         add_extension(VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME);
@@ -422,6 +434,10 @@ bool Instance::CreateDevice() {
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
+    if (!vk12_features.bufferDeviceAddress) {
+        LOG_WARNING(Render_Vulkan,
+                    "bufferDeviceAddress is unavailable, direct memory access cannot be used");
+    }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -682,7 +698,8 @@ void Instance::CreateAllocator() {
     };
 
     const VmaAllocatorCreateInfo allocator_info = {
-        .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+        .flags = IsBufferDeviceAddressSupported() ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT
+                                                  : VmaAllocatorCreateFlags{},
         .physicalDevice = physical_device,
         .device = *device,
         .pVulkanFunctions = &functions,
@@ -756,12 +773,13 @@ void Instance::CollectPhysicalMemoryInfo() {
         // We reserve some memory for the system.
         const u64 system_memory = std::min<u64>(total_memory_budget / 8, 1_GB);
         total_memory_budget -= system_memory;
-        return;
+    } else {
+        // Leave at least 8 GB for the system on integrated GPUs.
+        const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
+        total_memory_budget =
+            static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(2_GB)));
     }
-    // Leave at least 8 GB for the system on integrated GPUs.
-    const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
-    total_memory_budget =
-        static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(2_GB)));
+    LOG_INFO(Render_Vulkan, "GPU memory budget is {} MiB", total_memory_budget / 1_MB);
 }
 
 void Instance::CollectImageFormatInfo() {
