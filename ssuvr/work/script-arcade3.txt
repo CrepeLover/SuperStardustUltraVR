@@ -1,0 +1,17 @@
+# Super Stardust Ultra VR, boot patch on (title at ~13 s): single player menu ~25 s -> Arcade difficulty ~34 s
+# -> starting planet ~42 s -> controls ~51 s -> tips ~60 s -> play.
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+50 0.3 cross
+55 0.3 cross
+60 0.3 cross
+64 0.3 cross
+68 0.3 cross
+# play: move with the left stick, fire with the right
+72 50 rx=255 ry=128 lx=128 ly=60

@@ -1,0 +1,2 @@
+# single real X press 3 s after the calibrate screen appears (~14 s)
+17 0.3 cross

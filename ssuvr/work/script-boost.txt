@@ -1,0 +1,14 @@
+# Super Stardust Ultra VR boost test (2026-11-07): menus to Arcade, fire up 50-84 s; move right 66-69 s, still 69-71, right + l2 (boost) 71-74, still 74-84.
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+50 16 rx=128 ry=0 lx=128 ly=128
+66 3 rx=128 ry=0 lx=255 ly=128
+69 2 rx=128 ry=0 lx=128 ly=128
+71 3 rx=128 ry=0 lx=255 ly=128 l2
+74 10 rx=128 ry=0 lx=128 ly=128

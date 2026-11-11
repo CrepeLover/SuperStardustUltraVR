@@ -1,0 +1,9 @@
+# Super Stardust Ultra VR: get past the legal screen and poke at the menu.
+# <start s> <hold s> <inputs>
+18 0.3 cross
+30 0.3 cross
+42 0.3 cross
+54 0.3 down
+56 0.3 cross
+70 0.3 cross
+84 0.3 cross

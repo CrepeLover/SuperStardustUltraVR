@@ -1,0 +1,2 @@
+# legal screen (page 6) dismissed by a real press; calibrate auto-fires
+15 0.3 cross

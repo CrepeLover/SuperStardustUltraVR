@@ -1,0 +1,19 @@
+# Super Stardust Ultra VR: legal -> calibrate -> title -> main menu -> VR Invasion Zone -> play.
+# <start s> <hold s> <inputs>   (video skipped: legal ~50 s; without the skip: calibrate ~45-58 s, title ~64 s, main menu ~72 s)
+15 0.3 cross
+45 0.3 cross
+58 0.3 cross
+69 0.3 cross
+75 0.3 down
+78 0.3 cross
+86 0.3 cross
+94 0.3 cross
+102 0.3 cross
+# the tips screen: continue
+110 0.3 cross
+# look 35 degrees to the left, then back, to see the head pose drive the view
+118 6 head=0,0,0,35,0,0
+125 6 head=0,0,0,0,0,0
+# fire with the right stick, move with the left
+128 10 rx=255 ry=128 lx=128 ly=60
+140 6 head=0,0,0,-30,10,0

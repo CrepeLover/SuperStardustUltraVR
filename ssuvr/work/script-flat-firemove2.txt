@@ -1,0 +1,12 @@
+# Super Stardust Ultra VR, FLAT mode: as script-firemove2.txt plus one X at 47 s (flat shows a tips page after the controls page).
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+47 0.3 cross
+50 16 rx=128 ry=0 lx=128 ly=128
+66 4 rx=128 ry=128 lx=255 ly=128

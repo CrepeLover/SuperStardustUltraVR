@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <!-- Written by launch-ssuvr.ps1, always disabled (SHADPS4_SSU_FPS does this now); edits here are overwritten on the next start. -->
+  <Metadata Name="Game frame rate 120" AppVer="01.03" AppElf="eboot.bin" isEnabled="false">
+    <PatchList>
+      <!-- 0x25ca3f vmovss xmm0,[rip+0x359a41] (59.94 at 0x5b6488) -> [rip+0x359c95] (120.0 at 0x5b66dc) -->
+      <Line Type="bytes" Address="0065CA43" Value="959C3500"/>
+    </PatchList>
+  </Metadata>
+</Patch>

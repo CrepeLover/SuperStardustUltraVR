@@ -1,0 +1,7 @@
+# timing probe: real X presses every 0.4 s across the window in which the calibrate screen appears (~13 s)
+12.6 0.2 cross
+13.0 0.2 cross
+13.4 0.2 cross
+13.8 0.2 cross
+14.2 0.2 cross
+14.6 0.2 cross

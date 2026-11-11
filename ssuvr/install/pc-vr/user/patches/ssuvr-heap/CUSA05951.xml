@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <!-- Written by launch-ssuvr.ps1: enabled only for a 400% scene, together with extra_dmem_in_mbytes = 2048. -->
+  <Metadata Name="Shared Video heap 3.75 GB" AppVer="01.03" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="00955BFB" Value="000000F0"/>
+      <Line Type="bytes" Address="00955C2C" Value="000000F0"/>
+      <Line Type="bytes" Address="00955CB2" Value="000000F0"/>
+      <Line Type="bytes" Address="00955ED3" Value="000000F0"/>
+    </PatchList>
+  </Metadata>
+</Patch>

@@ -1,0 +1,20 @@
+# Super Stardust Ultra VR, boot patch on (title at ~13 s): title -> main menu at ~23 s (Single Player
+# highlighted; order: Single Player, VR Invasion Zone, Challenges, High Scores, Options, Help)
+# -> down to VR Invasion Zone -> confirm whatever follows -> play.
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+27 0.3 down
+31 0.3 cross
+36 0.3 cross
+41 0.3 cross
+46 0.3 cross
+51 0.3 cross
+56 0.3 cross
+61 0.3 cross
+66 0.3 cross
+# play: fire with the right stick, move with the left, look around a little
+71 10 rx=255 ry=128 lx=128 ly=60
+82 5 head=0,0,0,25,0,0
+88 5 head=0,0,0,-25,8,0
+94 40 rx=255 ry=128 lx=128 ly=60

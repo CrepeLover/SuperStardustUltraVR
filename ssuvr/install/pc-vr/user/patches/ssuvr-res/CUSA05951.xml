@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <!-- Written by launch-ssuvr.ps1 from its RenderPercent setting; edits here are overwritten on the next start. -->
+  <Metadata Name="Eye render targets 3840x4320 (400%)" AppVer="01.03" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="00957830" Value="000F0000E0100000"/>
+    </PatchList>
+  </Metadata>
+</Patch>

@@ -1,0 +1,11 @@
+# Super Stardust Ultra VR: menus to Arcade, fire up 50-82 s with the ship still, headset reports 70 mm IPD from 62 s (does the game follow an IPD change?).
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+50 32 rx=128 ry=0 lx=128 ly=128
+62 1 ipd=70

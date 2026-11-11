@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <!-- Super Stardust Ultra VR 1.03 (EU, eboot sha256 4A6349CB...CA5D). Addresses are eboot vaddr + 0x400000. -->
+  <Metadata Name="Boot straight to the title screen" Author="ssuvr port" Note="Skips the autosave notice, the SIE / XDEV / Housemarque logos, the intro video, the legal text and the calibrate prompt. The start-up chain begins at the legal page, which expires on its first update, and the calibrate screen presses Cross for you on its second update (the view offset it stores is still correct because the legal page ran). Autosave stays armed." AppVer="01.03" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <!-- sub_3839f0 make_startup_chain: 'xor ecx,ecx ; mov rdi,r14' -> 'mov ecx,6' (rdi == r14 here): first Startup_Fader page = 6 (legal text) instead of 0.
+           Do not use 7: the calibrate screen then runs before the menu view has swung into place and the title ends up on a tilted panel. -->
+      <Line Type="bytes" Address="00783A5D" Value="B906000000" />
+      <!-- sub_4eddf0 Startup_Fader::on_exit: 'test eax,eax ; jne skip' -> nops: Persistent_Data::set_save_allowed(true) on exit of any page, not only page 0 -->
+      <Line Type="bytes" Address="008EDE90" Value="9090" />
+      <!-- sub_4ed770 Startup_Fader::update, mode-0 show_time load: 'vmovss xmm0,[show_time]' -> 'vxorps xmm0,xmm0,xmm0 ; 4 nops': mode-0 pages time out on their first update (the Read-me viewer is mode 1 and keeps its FLT_MAX) -->
+      <Line Type="bytes" Address="008ED8AE" Value="C5F857C090909090" />
+      <!-- sub_4ed770 page 6 (legal text): 'je no_cross' and 'jne no_cross' -> nops: the legal page no longer waits for Cross -->
+      <Line Type="bytes" Address="008ED91D" Value="909090909090" />
+      <Line Type="bytes" Address="008ED92A" Value="909090909090" />
+      <!-- sub_50ab70 Morpheus_Calibration_Screen::update, Cross check (26 bytes at 0x50ad09):
+           'cmp byte [rbx+0xdc],0 ; je no_press ; cmp dword [rbx+0xa8],8 ; jne no_press' (input enabled and the button is Cross)
+           -> 'cmp byte [rbx+0xdd],0 ; je no_press ; cmp byte [rbx+0x44],0 ; jne no_press' (first update already ran, and not done yet):
+           the Cross path (store the HMD view offset, build the next screen, set the done flag) runs once, on the second update -->
+      <Line Type="bytes" Address="0090AD09" Value="80BBDD000000000F840601000080BB44000000000F85F9000000" />
+    </PatchList>
+  </Metadata>
+</Patch>

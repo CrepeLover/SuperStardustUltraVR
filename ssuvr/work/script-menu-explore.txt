@@ -1,0 +1,10 @@
+# Super Stardust Ultra VR (2026-11-08): title -> main menu -> Single Player submenu, then step down
+# through it (no confirm) so eye captures show each entry. <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 down
+28 0.3 down
+31 0.3 down
+34 0.3 down
+37 0.3 down
+40 0.3 down

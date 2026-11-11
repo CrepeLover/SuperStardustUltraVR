@@ -1,0 +1,3 @@
+# probe: does any button press change the title panel? circle at 20 s (no-op on the title), cross at 26 s (to main menu)
+20 0.3 circle
+26 0.3 cross

@@ -1,0 +1,20 @@
+# Super Stardust Ultra VR recenter test (2026-11-07): menus to Arcade, fire up 50-60 s with the ship still,
+# head 10 cm to the right at 61 s, pause + Center HMD (the game's own calibrate, there) at 63-66 s, resume,
+# head back to the middle at 70 s (the game's offset is now stale: view 10 cm off), view reset at 73 s
+# (the emulator's recenter, as SteamVR's reset; the SSU hook should calibrate the game to the head again).
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+50 10 rx=128 ry=0 lx=128 ly=128
+61 1 head=0.1,0,0
+63 0.3 options
+64.5 0.3 down
+66 0.3 cross
+67.5 0.3 cross
+70 1 head=0,0,0
+73 0.2 recenter

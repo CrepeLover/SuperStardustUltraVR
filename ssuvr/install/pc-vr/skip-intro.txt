@@ -1,0 +1,8 @@
+# Input script used by launch-ssuvr.ps1 when "Skip the intro" is on (SHADPS4_INPUT_SCRIPT).
+# With the patch in user\patches\ssuvr\ the game boots straight to the title screen on its own, so this
+# file presses nothing. It is kept so the launcher's SkipIntro setting still has a script to point at.
+# Format (src/input/scripted_input.h): <start seconds> <hold seconds> <inputs>; times count from the
+# emulator start. The headset's controllers keep working beside this (SHADPS4_XR_CONTROLLERS=1).
+# If the patch is disabled (isEnabled="false" in the XML), put these back:
+#   50 0.3 cross   (legal)      53 0.3 cross (calibrate)   56 0.3 cross (title)   59 0.3 cross
+#   63 0.3 circle  65 0.3 circle   (back out of any menu an extra press opened)

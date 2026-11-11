@@ -1,0 +1,11 @@
+# Super Stardust Ultra VR, boot patch on (title at ~13 s): title -> main menu -> first item, pressing on.
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+# play: move with the left stick, fire with the right
+52 20 rx=255 ry=128 lx=128 ly=60

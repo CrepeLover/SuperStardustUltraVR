@@ -1,0 +1,11 @@
+# Super Stardust Ultra VR: menus to Arcade, then fire straight up for 6 s, move right for 4 s, then nothing (logic-speed test).
+# <start s> <hold s> <inputs>
+15 0.3 cross
+20 0.3 cross
+25 0.3 cross
+30 0.3 cross
+35 0.3 cross
+40 0.3 cross
+45 0.3 cross
+50 6 rx=128 ry=0 lx=128 ly=128
+56 4 rx=128 ry=128 lx=255 ly=128
