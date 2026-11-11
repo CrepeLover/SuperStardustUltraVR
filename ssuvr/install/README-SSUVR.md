@@ -3,8 +3,9 @@
 Runs the PS4 PSVR title Super Stardust Ultra VR (CUSA05951, EU, patch 1.03) in the shadPS4 +
 OpenXR fork used for the Farpoint and Astro Bot ports, on a PC VR headset or flat on the monitor.
 The emulator, `pc-vr\shadps4.exe`, is built from `C:\Games\Farpoint-src` (branch `ssuvr`, the
-evertec82/Farpoint v0.9.6 tree, whose VR bridge comes from bigmak94's AstroQuest) and copied
-into `pc-vr\`. It is not part of this folder yet: build it first, then copy it there.
+evertec82/Farpoint v0.9.6 tree, whose VR bridge comes from bigmak94's AstroQuest, with shadPS4 main
+of 2026-11-10 merged in) and copied into `pc-vr\`. It is not part of this folder yet: build it
+first, then copy it there. `pc-vr\BUILD.txt` lists the local builds with their SHA-256.
 
 ## Install layout
 
@@ -21,6 +22,7 @@ C:\Games\SuperStardustUltraVR\
     launch-ssuvr.ps1                        the launcher (PowerShell 5.1, ASCII)
     config-default.json                     emulator profile copied to user\config.json on the first run
     shadps4.exe                             the emulator, built from C:\Games\Farpoint-src branch ssuvr (copy it here)
+    BUILD.txt                               the local builds of shadps4.exe, each with its SHA-256
     ssuvr-settings.json                     saved choices from the settings window (created on first start)
     user\config.json                        the emulator profile actually used (portable user directory)
     user\vr.json                            optional VR bridge file config (headset on/off/auto, ipd_mm, fov_tan, ...)

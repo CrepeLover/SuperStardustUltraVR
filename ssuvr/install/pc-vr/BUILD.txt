@@ -1,0 +1,11 @@
+Super Stardust Ultra VR: local builds of pc-vr\shadps4.exe
+
+2026-11-08: C:\Games\Farpoint-src, the earlier branch ssuvr (evertec82 Farpoint v0.9.6 + US Farpoint + Steam Frame bindings + Super Stardust Ultra VR support).
+SHA256 ffe2f22a15afa07cee53feed7b3a2d6c8ec021c30a2724fe4368dda4c7d3b6fc
+Kept as C:\Games\ssuvr-work\exe-backups\shadps4-before-mainline-20261111-0002.exe.
+
+2026-11-11: shadPS4 main of 2026-11-10 (4788f0b1) merged into the Super Stardust Ultra VR branch, which now sits on evertec82 Farpoint v0.9.6 directly (with the emulator changes of the Farpoint build: Steam Frame controls, AF16, MLAA; without its Farpoint launcher changes): C:\Games\Farpoint-src, branch ssuvr-new, commit 0247ffd1. Brings upstream's texture cache, memory and kernel fixes and no 33 ms smoothing on a DualSense's sticks and triggers (#5340, #5377).
+Checked against the 2026-11-08 build with C:\Games\ssuvr-work\ab-ssuvr.ps1 (runs\ab-A-installed.txt, runs\ab-B-mainline.txt): the same headset frame rates (world rate 120: 119.3, 60: 59.7, saved scene size: 119.2, recenter: 59.4), the same shot lifetime and reach at world rates 120 and 60, and the scripted view reset still recalibrates the game.
+SHA256 a5a369dc26ea6aa4c57c595857ea58150e6627ea37d60a9271f8bd39a015739f
+The pipeline cache format changed (the shader profile grew from 64 to 68 bytes, and a build ignores a cache of the other size without ever rewriting it), so the old cache was moved to user\cache\CUSA05951.before-mainline-20261111-0002 and the first run builds a new one.
+To go back: copy the 2026-11-08 executable over pc-vr\shadps4.exe, rename user\cache\CUSA05951 to something else and the old cache folder back to CUSA05951.

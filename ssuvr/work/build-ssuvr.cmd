@@ -1,6 +1,6 @@
 @echo off
-rem Builds the shadPS4 PC VR emulator from C:\Games\Farpoint-src (branch ssuvr = Farpoint v0.9.6 + US Farpoint + Steam Frame
-rem bindings + Super Stardust Ultra VR support). Same toolchain as C:\Games\farpoint-work\build-farpoint.cmd: clang-cl from
+rem Builds Super Stardust Ultra VR from C:\Games\Farpoint-src (branch ssuvr = evertec82 Farpoint v0.9.6 + Super Stardust
+rem Ultra VR support + shadPS4 main of 2026-11-10). Same toolchain as C:\Games\farpoint-work\build-farpoint.cmd: clang-cl from
 rem LLVM 23.1.4, MSVC 14.44 + Windows SDK via vcvars64, VS-bundled CMake/Ninja, HAVE_ENDIAN_H=0. Idle priority.
 rem usage: build-ssuvr.cmd [configure|build] [jobs]
 setlocal
