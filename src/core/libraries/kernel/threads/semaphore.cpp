@@ -17,6 +17,7 @@
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/kernel/wait_stats.h"
 
 namespace Libraries::Kernel {
 
@@ -327,6 +328,7 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
 }
 
 s32 PS4_SYSV_ABI sceKernelWaitSema(OrbisKernelSema sem, s32 needCount, u32* pTimeout) {
+    WAIT_STATS_SCOPE("sceKernelWaitSema");
     if (!orbis_sems.IsAllocated(sem)) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
@@ -388,6 +390,7 @@ s32 PS4_SYSV_ABI posix_sem_destroy(PthreadSem** sem) {
 }
 
 s32 PS4_SYSV_ABI posix_sem_wait(PthreadSem** sem) {
+    WAIT_STATS_SCOPE("sem_wait");
     if (sem == nullptr || *sem == nullptr) {
         *__Error() = POSIX_EINVAL;
         return -1;
@@ -408,6 +411,7 @@ s32 PS4_SYSV_ABI posix_sem_trywait(PthreadSem** sem) {
 }
 
 s32 PS4_SYSV_ABI posix_sem_timedwait(PthreadSem** sem, const OrbisKernelTimespec* t) {
+    WAIT_STATS_SCOPE("sem_timedwait");
     if (sem == nullptr || *sem == nullptr) {
         *__Error() = POSIX_EINVAL;
         return -1;

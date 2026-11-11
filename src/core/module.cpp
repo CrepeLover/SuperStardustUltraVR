@@ -12,6 +12,7 @@
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
 #include "core/libraries/error_codes.h"
+#include "core/libraries/kernel/wait_stats.h"
 #include "core/loader/dwarf.h"
 #include "core/memory.h"
 #include "core/module.h"
@@ -293,6 +294,11 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             MemoryPatcher::g_eboot_image_size = base_size;
             MemoryPatcher::g_eboot_name = name;
             MemoryPatcher::OnGameLoaded();
+            Libraries::Kernel::WaitStats::SsuPatchParticleStep();
+            Libraries::Kernel::WaitStats::SsuPatchRateConstants();
+            Libraries::Kernel::WaitStats::SsuPatchBeamSpacing();
+            Libraries::Kernel::WaitStats::SsuPatchFrameLoop();
+            Libraries::Kernel::WaitStats::SsuCountCalls();
         }
     }
 

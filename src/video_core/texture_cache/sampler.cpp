@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
+#include "common/logging/log.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/sampler.h"
@@ -11,12 +13,29 @@ namespace VideoCore {
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                  const AmdGpu::BorderColorBuffer border_color_base, const bool is_depth) {
     using namespace Vulkan;
-    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
-                                   (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
-                                    AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
+    const bool requested = AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
+                           AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
+    // SHADPS4_FORCE_ANISO=<n> (16 when left out, 0 or 1: as the title asks): every sampler that
+    // filters smoothly between mip levels, or asks for some anisotropic filtering already, gets
+    // up to n samples along a texture seen at a slant. Not depth comparisons (shadow maps).
+    static const float force_aniso = [] {
+        const char* value = std::getenv("SHADPS4_FORCE_ANISO");
+        const float n = value != nullptr ? static_cast<float>(std::atof(value)) : 16.0f;
+        if (n > 1.0f) {
+            LOG_INFO(Render_Vulkan, "Anisotropic filtering raised to {}x on mipmapped textures", n);
+        }
+        return n;
+    }();
+    const bool mipmapped = sampler.xy_min_filter != AmdGpu::Filter::Point &&
+                           sampler.mip_filter != AmdGpu::MipFilter::None && sampler.MaxLod() > 0.0f;
+    const bool forced = force_aniso > 1.0f && !is_depth &&
+                        sampler.depth_compare_func == AmdGpu::DepthCompare::Never &&
+                        (requested || mipmapped);
+    const bool anisotropy_enable =
+        instance.IsAnisotropicFilteringSupported() && (requested || forced);
+    const float wanted = forced ? std::max(sampler.MaxAniso(), force_aniso) : sampler.MaxAniso();
     const float max_anisotropy =
-        anisotropy_enable ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
-                          : 1.0f;
+        anisotropy_enable ? std::clamp(wanted, 1.0f, instance.MaxSamplerAnisotropy()) : 1.0f;
     auto border_color = LiverpoolToVK::BorderColor(sampler.border_color_type);
     if (border_color == vk::BorderColor::eFloatCustomEXT &&
         !instance.IsCustomBorderColorSupported()) {

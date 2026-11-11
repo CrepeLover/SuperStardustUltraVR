@@ -15,6 +15,7 @@
 #include "core/libraries/kernel/posix_error.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/kernel/wait_stats.h"
 
 namespace Libraries::Kernel {
 
@@ -462,6 +463,7 @@ int PS4_SYSV_ABI sceKernelDeleteEqueue(OrbisKernelEqueue eq) {
 int PS4_SYSV_ABI sceKernelWaitEqueue(OrbisKernelEqueue eq, OrbisKernelEvent* ev, int num, int* out,
                                      OrbisKernelUseconds* timo) {
     HLE_TRACE;
+    WAIT_STATS_SCOPE("sceKernelWaitEqueue");
     if (!kqueues.contains(eq)) {
         return ORBIS_KERNEL_ERROR_EBADF;
     }

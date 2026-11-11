@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <cstdlib>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "core/libraries/error_codes.h"
@@ -21,6 +23,37 @@ static Libraries::UserService::OrbisUserServiceUserId g_user_id = -1;
 // Panel of the first generation headset: one 1920x1080 OLED shared by both eyes.
 static constexpr u32 PanelWidth = 1920;
 static constexpr u32 PanelHeight = 1080;
+
+// SHADPS4_HMD_PANEL=<width>x<height> or =<scale>: the panel the title is told about. A title
+// that sizes its eye images from the panel (half its width by its height an eye) then renders
+// that much larger a picture for a PC headset; one with hard-coded sizes ignores it.
+static OrbisHmdPanelResolution ReportedPanel() {
+    static const OrbisHmdPanelResolution panel = [] {
+        OrbisHmdPanelResolution result{PanelWidth, PanelHeight};
+        const char* env = std::getenv("SHADPS4_HMD_PANEL");
+        if (env == nullptr || *env == '\0') {
+            return result;
+        }
+        u32 width = 0;
+        u32 height = 0;
+        if (std::sscanf(env, "%ux%u", &width, &height) == 2) {
+            // as given
+        } else if (const double scale = std::atof(env); scale >= 0.5 && scale <= 4.0) {
+            width = static_cast<u32>(PanelWidth * scale + 0.5);
+            height = static_cast<u32>(PanelHeight * scale + 0.5);
+        }
+        // Even, within what a swapchain can hold, and no smaller than the real panel's half.
+        width &= ~1u;
+        if (width < 960 || height < 540 || width > 16384 || height > 8192) {
+            LOG_WARNING(Lib_Hmd, "Ignoring SHADPS4_HMD_PANEL={}", env);
+            return result;
+        }
+        result = {width, height};
+        LOG_INFO(Lib_Hmd, "The title is told of a {}x{} panel (SHADPS4_HMD_PANEL)", width, height);
+        return result;
+    }();
+    return panel;
+}
 // Microseconds between a flip and the frame reaching the panel, per refresh rate. Titles add
 // this to their tracker prediction time, so the exact figure only shifts that prediction.
 static constexpr u16 FlipToDisplayLatency90Hz = 13000;
@@ -43,7 +76,7 @@ static void FillDeviceInformation(OrbisHmdDeviceInformation* info) {
         info->user_id = UserManagement.GetDefaultUser().user_id;
     }
     info->status = OrbisHmdDeviceStatus::ORBIS_HMD_DEVICE_STATUS_READY;
-    info->device_info.panel_resolution = {PanelWidth, PanelHeight};
+    info->device_info.panel_resolution = ReportedPanel();
     info->device_info.flip_to_display_latency = {FlipToDisplayLatency90Hz,
                                                  FlipToDisplayLatency120Hz};
     // Whether the headset is on the head: always, unless a host knows better.
@@ -119,8 +152,9 @@ s32 PS4_SYSV_ABI sceHmdGet2DEyeOffset(s32 handle, OrbisHmdEyeOffset* left_offset
         return ORBIS_HMD_ERROR_PARAMETER_NULL;
     }
 
-    // Half the interpupillary distance either side of the headset centre.
-    const float half_ipd = Core::Vr::Runtime::Instance().GetConfig().ipd * 0.5f;
+    // Half the interpupillary distance (times the world scale) either side of the headset centre.
+    const auto& vr_config = Core::Vr::Runtime::Instance().GetConfig();
+    const float half_ipd = vr_config.ipd * vr_config.world_scale * 0.5f;
     left_offset->offset_x = -half_ipd;
     left_offset->offset_y = 0;
     left_offset->offset_z = 0;

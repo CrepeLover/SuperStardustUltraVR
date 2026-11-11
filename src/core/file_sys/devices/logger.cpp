@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+
 #include "common/logging/log.h"
 #include "core/file_sys/devices/logger.h"
 #include "core/libraries/kernel/file_system.h"
@@ -56,10 +58,14 @@ void Logger::log_flush() {
     if (buffer.empty()) {
         return;
     }
+    // Seconds since the emulator started, so that the title's own messages can be timed.
+    static const auto start = std::chrono::steady_clock::now();
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     if (is_err) {
-        LOG_ERROR(Tty, "[{}] {}", prefix, std::string_view{buffer});
+        LOG_ERROR(Tty, "[{}] {:.3f} s: {}", prefix, seconds, std::string_view{buffer});
     } else {
-        LOG_INFO(Tty, "[{}] {}", prefix, std::string_view{buffer});
+        LOG_INFO(Tty, "[{}] {:.3f} s: {}", prefix, seconds, std::string_view{buffer});
     }
     buffer.clear();
 }

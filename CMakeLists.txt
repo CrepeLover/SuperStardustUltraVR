@@ -365,6 +365,8 @@ set(KERNEL_LIB src/core/libraries/kernel/coredump/coredump.cpp
                src/core/libraries/kernel/threads.h
                src/core/libraries/kernel/time.cpp
                src/core/libraries/kernel/time.h
+               src/core/libraries/kernel/wait_stats.cpp
+               src/core/libraries/kernel/wait_stats.h
                src/core/libraries/kernel/orbis_error.h
                src/core/libraries/kernel/posix_error.h
                src/core/libraries/kernel/aio.cpp

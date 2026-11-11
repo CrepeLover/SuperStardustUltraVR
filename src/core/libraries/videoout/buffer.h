@@ -75,4 +75,11 @@ struct VideoOutBuffer {
     uintptr_t address_right;
 };
 
+/// The left and right display buffers of one slot, as sceVideoOutRegisterStereoBuffers takes
+/// them.
+struct StereoBuffers {
+    void* left;
+    void* right;
+};
+
 } // namespace Libraries::VideoOut

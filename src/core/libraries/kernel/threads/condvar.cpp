@@ -13,6 +13,7 @@
 #include "core/libraries/kernel/threads/sleepq.h"
 #include "core/libraries/kernel/threads/thread_state.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/kernel/wait_stats.h"
 
 namespace Libraries::Kernel {
 
@@ -209,6 +210,7 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mutex) {
+    WAIT_STATS_SCOPE("pthread_cond_wait");
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     return cvp->Wait(mutex, nullptr);
@@ -216,6 +218,7 @@ int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mute
 
 int PS4_SYSV_ABI posix_pthread_cond_timedwait(PthreadCondT* cond, PthreadMutexT* mutex,
                                               const OrbisKernelTimespec* abstime) {
+    WAIT_STATS_SCOPE("pthread_cond_timedwait");
     if (abstime == nullptr || abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
         abstime->tv_nsec >= 1000000000) {
         return POSIX_EINVAL;

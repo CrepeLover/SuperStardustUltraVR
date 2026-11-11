@@ -1015,9 +1015,45 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
         return value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
                                 : 0.0f;
     }();
+    // SHADPS4_VR_MLAA=<0..1>: edges in the eyes' pictures smoothed on the way by morphological
+    // anti-aliasing at that strength (1 when left out; 0: not at all). Not the overlay over them.
+    static const float mlaa = [] {
+        const char* value = std::getenv("SHADPS4_VR_MLAA");
+        const float strength =
+            value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
+                             : 1.0f;
+        LOG_INFO(Render_Vulkan, "Headset pictures: MLAA {}",
+                 strength > 0.0f ? fmt::format("at strength {}", strength) : std::string{"off"});
+        return strength;
+    }();
+    // The eye pictures hold display-ready (sRGB-encoded) values: on the console the reprojection
+    // library puts them on the panel as they are. Sampled through a view of an sRGB format
+    // (Astro Bot) they arrive decoded, as linear light. Through a UNORM view (Super Stardust
+    // Ultra VR) they would be taken for linear light and encoded a second time on the way to the
+    // headset: far too bright, washed out, shadows lifted and the dark banded. Those are decoded
+    // first. SHADPS4_VR_EYE_DECODE=0: never (as before), 1: always, auto/left out: by the format.
+    static const int eye_decode = [] {
+        const char* value = std::getenv("SHADPS4_VR_EYE_DECODE");
+        if (value == nullptr || *value == '\0' || std::string_view{value} == "auto") {
+            return -1;
+        }
+        return std::atoi(value) != 0 ? 1 : 0;
+    }();
+    const vk::Format eye_format = descs[0].view_info.format;
+    const bool unorm_eyes =
+        eye_format == vk::Format::eR8G8B8A8Unorm || eye_format == vk::Format::eB8G8R8A8Unorm;
+    const bool decode_eyes = eye_decode >= 0 ? eye_decode != 0 : unorm_eyes;
+    static int logged_decode = -1;
+    if (logged_decode != static_cast<int>(decode_eyes)) {
+        logged_decode = static_cast<int>(decode_eyes);
+        LOG_INFO(Render_Vulkan, "Headset pictures: eye views {}, {}{}", vk::to_string(eye_format),
+                 decode_eyes ? "decoded from sRGB" : "taken as they are",
+                 eye_decode >= 0 ? " (SHADPS4_VR_EYE_DECODE)" : "");
+    }
     auto hmd_settings = pp_settings;
-    hmd_settings.srgb_input = false;
+    hmd_settings.srgb_input = decode_eyes ? 1 : 0;
     hmd_settings.sharpen = sharpen;
+    hmd_settings.mlaa = mlaa;
     if (frame != nullptr) {
         const auto bounds = Core::Vr::SpectatorContentRect(frame->width, frame->height,
                                                         desktop_aspect, crop);
@@ -1070,9 +1106,10 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
         DebugState.output_resolution = {frame->width, frame->height};
     }
     if (local != nullptr) {
-        // An image that encodes for display itself.
+        // An image that encodes for display itself. The headset is SDR whatever the desktop is.
         auto local_settings = hmd_settings;
         local_settings.linear_out = 1;
+        local_settings.hdr = 0;
         hmd_pp_pass.Render(cmdbuf, regions_for(*local), *local, local_settings);
         DebugState.output_resolution = {local->width, local->height};
     }
@@ -1246,6 +1283,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame) {
             std::chrono::duration<double>(Clock::now() - shot_start).count() >=
                 shot_from + shot_seconds * (shots_taken + 1)) {
             ++shots_taken;
+            // The eye pictures as the game drew them too (full size), as auto_shot_every does.
+            VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
             VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::WithOverlays);
         }
     }

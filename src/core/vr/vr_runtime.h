@@ -130,6 +130,10 @@ struct Config {
     /// This preserves binocular coverage when a standalone host narrows the view.
     bool fov_symmetric{false};
     float fov_scale{1.0f};
+    /// How big the world looks. The title is given the eye separation and head movement times
+    /// world_scale, so 1.25 shows everything at 80% of its size, nearer by as much
+    /// (SHADPS4_VR_WORLD_SIZE=80). Frames still go to the headset at the real eye positions.
+    float world_scale{1.0f};
     /// Where the player's resting head position sits in tracker space. The PS Camera is the
     /// origin, so the player is placed a comfortable distance in front of it.
     Vec3 origin_offset{0.0f, 0.0f, 1.5f};
@@ -185,6 +189,11 @@ public:
     /// RecenterSeat, and the title is told to take stock again, the way the console tells it
     /// when the player asks for the view to be reset.
     void RequestRecenter();
+    /// How many times the seat was recentred (RecenterSeat, for whatever reason) so far: a title
+    /// hook that has to follow a reset of the view compares it with the count it saw last.
+    [[nodiscard]] u32 Recenters() const {
+        return recenters.load(std::memory_order_relaxed);
+    }
     /// Turns the player round where they sit, by so many steps to the right (to the left if
     /// negative): for those who cannot turn round themselves. The head stays where it is in
     /// the title's world and faces another way; a controller that nothing locates comes
@@ -305,10 +314,12 @@ private:
     void PlaceHead();
     Vec3 PositionToTracker(const Vec3& host) const;
     Vec3 DirectionToTracker(const Vec3& host) const;
+    Vec3 VelocityToTracker(const Vec3& host) const;
 
     Config config;
     std::atomic<bool> headset_worn{true};
     std::atomic<bool> view_gestures{};
+    std::atomic<u32> recenters{};
     std::mutex gesture_mutex;
     bool gesture_seat_taken{};
     bool gesture_options_down{};

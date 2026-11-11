@@ -298,6 +298,8 @@ public:
     Id bary_coord_pull_model{};
     Id bary_coord_nopersp{};
     Id bary_coord_nopersp_sample{};
+    // Sprite coordinate standing in for the barycentrics of a point draw (fs point_primitive).
+    Id point_coord{};
 
     struct TextureDefinition {
         const VectorIds* data_types;

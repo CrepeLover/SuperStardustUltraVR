@@ -19,6 +19,7 @@
 
 #include "core/libraries/hmd/hmd.h"
 #include "core/libraries/kernel/time.h"
+#include "core/libraries/kernel/wait_stats.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/libraries/videoout/videoout_error.h"
 #include "imgui/renderer/imgui_core.h"
@@ -219,6 +220,37 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
         LOG_INFO(Lib_VideoOut, "buffers[{}] = {:#x}", i + startIndex, address);
     }
 
+    return group_index;
+}
+
+int VideoOutDriver::RegisterStereoBuffers(VideoOutPort* port, s32 startIndex,
+                                          const StereoBuffers* buffers, s32 bufferNum,
+                                          const BufferAttribute* attribute) {
+    if (bufferNum < 0 || bufferNum > MaxDisplayBuffers) {
+        LOG_ERROR(Lib_VideoOut, "Attempted to register too many stereo buffers bufferNum = {}",
+                  bufferNum);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
+    }
+    // The left buffer of each pair is what a flip of the slot shows; the right one is kept
+    // with the slot for whoever composes a stereo output from it.
+    std::array<void*, MaxDisplayBuffers> left{};
+    for (s32 i = 0; i < bufferNum; ++i) {
+        left[i] = buffers[i].left;
+    }
+    const int group_index = RegisterBuffers(port, startIndex, left.data(), bufferNum, attribute);
+    if (group_index < 0) {
+        return group_index;
+    }
+    for (s32 i = 0; i < bufferNum; ++i) {
+        auto& slot = port->buffer_slots[startIndex + i];
+        slot.address_right = reinterpret_cast<uintptr_t>(buffers[i].right);
+        if (port != &social_port && slot.address_right != 0 &&
+            slot.address_right != slot.address_left) {
+            presenter->RegisterVideoOutSurface(port->groups[group_index], slot.address_right);
+        }
+        LOG_INFO(Lib_VideoOut, "stereo buffers[{}] = {:#x} / {:#x}", startIndex + i,
+                 slot.address_left, slot.address_right);
+    }
     return group_index;
 }
 
@@ -560,6 +592,11 @@ public:
     /// a half times as long, so that a title drawing a frame for every two of the headset's
     /// refreshes draws one for every three of the display's.
     bool IsRefresh(Clock::time_point now, u32 halves) {
+        // 0 is a test setting: every look is a refresh, so a title that waits for one never
+        // waits longer than a look. Shows how fast the title goes when refreshes never hold it.
+        if (halves == 0) {
+            return true;
+        }
         halves = std::max(halves, 1u);
         const auto display = Core::Vr::Runtime::Instance().GetDisplayRefresh();
         const auto display_period =
@@ -750,7 +787,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         if (const char* setting = std::getenv("SHADPS4_VR_PACE"); setting != nullptr) {
             char* end = nullptr;
             const long requested = std::strtol(setting, &end, 10);
-            if (end != setting && *end == '\0' && requested >= 1 && requested <= 6) {
+            if (end != setting && *end == '\0' && requested >= 0 && requested <= 6) {
                 pace = static_cast<u32>(requested);
             }
         }
@@ -842,6 +879,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
         // The headset reprojects once per refresh.
         Libraries::Hmd::OnVblank();
+        Libraries::Kernel::WaitStats::SsuFollowGameRate();
+        Libraries::Kernel::WaitStats::SsuProbe();
+        Libraries::Kernel::WaitStats::SsuReportCalls();
 
         timer.End();
     }

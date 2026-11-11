@@ -7,12 +7,17 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "common/elf_info.h"
+#include "common/farpoint_title.h"
 #include "common/logging/log.h"
 
 #include "core/libraries/error_codes.h"
+#include "core/libraries/kernel/wait_stats.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/move/move.h"
@@ -28,6 +33,28 @@
 namespace Libraries::VrTracker {
 
 static bool g_library_initialized = false;
+
+// SDK revisions sized these parameter structures differently. A mismatch used to fail
+// silently, which hid why a title got no tracking; the bytes are logged so that a new
+// layout can be decoded.
+template <typename T>
+static void ReportParamSize(const char* function, const T* param) {
+    if (param == nullptr || param->size == sizeof(T)) {
+        return;
+    }
+    static std::atomic<u32> reports{};
+    if (reports.fetch_add(1) >= 8) {
+        return;
+    }
+    std::string bytes;
+    const u32 shown = param->size < 4096 ? std::min<u32>(param->size, 256) : 64;
+    const auto* raw = reinterpret_cast<const u8*>(param);
+    for (u32 i = 0; i < shown; ++i) {
+        bytes += fmt::format("{:02x}{}", raw[i], i % 16 == 15 ? " | " : " ");
+    }
+    LOG_WARNING(Lib_VrTracker, "{}: parameter size {} differs from the {} bytes known here: {}",
+                function, param->size, sizeof(T), bytes);
+}
 
 // Internal memory
 static void* g_garlic_memory_pointer = nullptr;
@@ -111,6 +138,7 @@ static void WritePose(OrbisVrTrackerPoseData& out, const Core::Vr::Pose& pose) {
 s32 PS4_SYSV_ABI sceVrTrackerQueryMemory(const OrbisVrTrackerQueryMemoryParam* param,
                                          OrbisVrTrackerQueryMemoryResult* result) {
     LOG_DEBUG(Lib_VrTracker, "called");
+    ReportParamSize("sceVrTrackerQueryMemory", param);
     if (param == nullptr || result == nullptr ||
         param->size != sizeof(OrbisVrTrackerQueryMemoryParam) ||
         (param->profile != OrbisVrTrackerProfile::ORBIS_VR_TRACKER_PROFILE_000 &&
@@ -148,16 +176,24 @@ s32 PS4_SYSV_ABI sceVrTrackerInit(const OrbisVrTrackerInitParam* param) {
     if (!param)
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;
     OrbisVrTrackerInitParam compatible{};
-    if (Common::ElfInfo::Instance().GameSerial() == "CUSA04508" && param->size == 144) {
+    if (param->size == 144) {
+        // First seen with Farpoint 1.00 (SDK 4.0); keyed on the size rather than the title so
+        // that other titles of that SDK era initialize the same way.
         DecodeFarpointTrackerInit144(param, param->size, compatible);
         param = &compatible;
-        LOG_INFO(Lib_VrTracker, "Using Farpoint's 144-byte tracker initialization ABI");
+        LOG_INFO(Lib_VrTracker, "Using the 144-byte tracker initialization ABI (title {})",
+                 Common::ElfInfo::Instance().GameSerial());
+    } else {
+        ReportParamSize("sceVrTrackerInit", param);
     }
     if (g_library_initialized) {
         return ORBIS_VR_TRACKER_ERROR_ALREADY_INITIALIZED;
     }
 
-    // Calculate correct onion size for parameter checks
+    // Calculate the least onion size for parameter checks. The sizes and alignments are
+    // minimums, as the console library takes them: a title may hand over the larger pool
+    // sceVrTrackerQueryMemory answered for a query with automatic Move calibration while
+    // initializing with manual calibration (Super Stardust Ultra VR does).
     u32 required_onion_size = ORBIS_VR_TRACKER_BASE_ONION_SIZE;
     if (param->calibration_settings.move_position == ORBIS_VR_TRACKER_CALIBRATION_AUTO) {
         required_onion_size *= 2;
@@ -167,16 +203,16 @@ s32 PS4_SYSV_ABI sceVrTrackerInit(const OrbisVrTrackerInitParam* param) {
     if (param->size != sizeof(OrbisVrTrackerInitParam) ||
         // Check garlic memory parameters
         param->direct_memory_garlic == nullptr ||
-        param->direct_memory_garlic_alignment != ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
-        param->direct_memory_garlic_size != ORBIS_VR_TRACKER_GARLIC_SIZE ||
+        param->direct_memory_garlic_alignment < ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
+        param->direct_memory_garlic_size < ORBIS_VR_TRACKER_GARLIC_SIZE ||
         // Check onion memory parameters
         param->direct_memory_onion == nullptr ||
-        param->direct_memory_onion_alignment != ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
-        param->direct_memory_onion_size != required_onion_size ||
+        param->direct_memory_onion_alignment < ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
+        param->direct_memory_onion_size < required_onion_size ||
         // Check work memory parameters
         param->work_memory == nullptr ||
-        param->work_memory_alignment != ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
-        param->work_memory_size != ORBIS_VR_TRACKER_WORK_SIZE ||
+        param->work_memory_alignment < ORBIS_VR_TRACKER_MEMORY_ALIGNMENT ||
+        param->work_memory_size < ORBIS_VR_TRACKER_WORK_SIZE ||
         // Check compute queue parameters
         param->gpu_pipe_id >= AmdGpu::Liverpool::NumComputePipes ||
         param->gpu_queue_id >= AmdGpu::Liverpool::NumQueuesPerPipe ||
@@ -189,6 +225,20 @@ s32 PS4_SYSV_ABI sceVrTrackerInit(const OrbisVrTrackerInitParam* param) {
             OrbisVrTrackerCalibrationMode::ORBIS_VR_TRACKER_CALIBRATION_AUTO ||
         param->calibration_settings.gun_position >
             OrbisVrTrackerCalibrationMode::ORBIS_VR_TRACKER_CALIBRATION_AUTO) {
+        LOG_ERROR(Lib_VrTracker,
+                  "Rejected initialization: size {}, garlic {} {:#x}/{:#x}, onion {} {:#x}/{:#x} "
+                  "(needed {:#x}), work {} {:#x}/{:#x}, pipe {} queue {}, calibration "
+                  "hmd/pad/move/gun {}/{}/{}/{}",
+                  param->size, param->direct_memory_garlic != nullptr,
+                  param->direct_memory_garlic_size, param->direct_memory_garlic_alignment,
+                  param->direct_memory_onion != nullptr, param->direct_memory_onion_size,
+                  param->direct_memory_onion_alignment, required_onion_size,
+                  param->work_memory != nullptr, param->work_memory_size,
+                  param->work_memory_alignment, param->gpu_pipe_id, param->gpu_queue_id,
+                  static_cast<u32>(param->calibration_settings.hmd_position),
+                  static_cast<u32>(param->calibration_settings.pad_position),
+                  static_cast<u32>(param->calibration_settings.move_position),
+                  static_cast<u32>(param->calibration_settings.gun_position));
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;
     }
 
@@ -405,6 +455,10 @@ s32 PS4_SYSV_ABI sceVrTrackerGetResult(const OrbisVrTrackerGetResultParam* param
                                         : is_hmd ? runtime.GetHead()
                                         : is_gun ? runtime.GetTrackedPad()
                                                  : runtime.GetPad();
+    if (is_hmd) {
+        // A title that calibrates the head by itself follows the view reset (SSU).
+        Libraries::Kernel::WaitStats::SsuFollowRecenter(runtime.Recenters());
+    }
     if ((is_gun || is_move) && !state.tracked) {
         result->status = OrbisVrTrackerStatus::ORBIS_VR_TRACKER_STATUS_NOT_TRACKING;
         return ORBIS_OK;
@@ -478,8 +532,9 @@ s32 PS4_SYSV_ABI sceVrTrackerGetResult(const OrbisVrTrackerGetResultParam* param
     auto& hmd = result->hmd_info;
     WritePose(hmd.device_pose, state.pose);
     WritePose(hmd.head_pose, state.pose);
-    // The eyes sit half the interpupillary distance either side of the headset centre.
-    const float half_ipd = runtime.GetConfig().ipd * 0.5f;
+    // The eyes sit half the interpupillary distance (times the world scale) either side of the
+    // headset centre.
+    const float half_ipd = runtime.GetConfig().ipd * runtime.GetConfig().world_scale * 0.5f;
     const Core::Vr::Vec3 right = Core::Vr::Rotate(state.pose.orientation, {half_ipd, 0.0f, 0.0f});
     Core::Vr::Pose eye = state.pose;
     eye.position = {state.pose.position.x - right.x, state.pose.position.y - right.y,
@@ -533,7 +588,12 @@ s32 PS4_SYSV_ABI sceVrTrackerGpuSubmit(const OrbisVrTrackerGpuSubmitParam* param
         // Impossible to submit valid data here since sceCameraGetFrameData returns an error.
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;
     }
-    if (param == nullptr || param->size != sizeof(OrbisVrTrackerGpuSubmitParam)) {
+    // SDK 3.5 titles submit a 32-byte header followed by a 520-byte camera frame; the camera
+    // frame is not looked at here, so that layout is as good as the current one.
+    static constexpr u32 GpuSubmitParamSizeSdk35 = 552;
+    if (param == nullptr || (param->size != sizeof(OrbisVrTrackerGpuSubmitParam) &&
+                             param->size != GpuSubmitParamSizeSdk35)) {
+        ReportParamSize("sceVrTrackerGpuSubmit", param);
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;
     }
 
@@ -546,6 +606,7 @@ s32 PS4_SYSV_ABI sceVrTrackerGpuWait(const OrbisVrTrackerGpuWaitParam* param) {
     if (!g_library_initialized) {
         return ORBIS_VR_TRACKER_ERROR_NOT_INIT;
     }
+    ReportParamSize("sceVrTrackerGpuWait", param);
     if (param == nullptr || param->size != sizeof(OrbisVrTrackerGpuWaitParam)) {
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;
     }
@@ -581,6 +642,7 @@ s32 PS4_SYSV_ABI sceVrTrackerRecalibrate(const OrbisVrTrackerRecalibrateParam* p
     if (!g_library_initialized) {
         return ORBIS_VR_TRACKER_ERROR_NOT_INIT;
     }
+    ReportParamSize("sceVrTrackerRecalibrate", param);
     if (param == nullptr || param->size != sizeof(OrbisVrTrackerRecalibrateParam) ||
         param->device_type > OrbisVrTrackerDeviceType::ORBIS_VR_TRACKER_DEVICE_GUN) {
         return ORBIS_VR_TRACKER_ERROR_ARGUMENT_INVALID;

@@ -36,9 +36,12 @@ public:
         float gamma_slope = 12.92f;
         float gamma_exponent = 1.0f / 2.4f;
         float dither_quantum = 0.0f;
+        /// 0..1: how strongly edges in the eye's picture are smoothed first, by morphological
+        /// anti-aliasing (MLAA, host_shaders/post_process.frag). 0: not at all.
+        float mlaa = 0.0f;
     };
 
-    static_assert(sizeof(Settings) == 72); // Matches the fragment shader push constants.
+    static_assert(sizeof(Settings) == 76); // Matches the fragment shader push constants.
 
     void Create(const Instance& instance, Semaphore* master_semaphore,
                 vk::Format surface_format);

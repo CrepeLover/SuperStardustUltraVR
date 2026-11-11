@@ -96,6 +96,8 @@ public:
 
     int RegisterBuffers(VideoOutPort* port, s32 startIndex, void* const* addresses, s32 bufferNum,
                         const BufferAttribute* attribute);
+    int RegisterStereoBuffers(VideoOutPort* port, s32 startIndex, const StereoBuffers* buffers,
+                              s32 bufferNum, const BufferAttribute* attribute);
     int UnregisterBuffers(VideoOutPort* port, s32 attributeIndex);
     int ChangeBufferAttribute(VideoOutPort* port, s32 bufferIndex,
                               const BufferAttribute* attribute);

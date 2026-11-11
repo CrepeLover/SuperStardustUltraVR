@@ -10,6 +10,7 @@
 #include "common/logging/log.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/kernel/wait_stats.h"
 #include "pthread.h"
 
 namespace Libraries::Kernel {
@@ -390,6 +391,7 @@ int PS4_SYSV_ABI sceKernelPollEventFlag(OrbisKernelEventFlag ef, u64 bitPattern,
 }
 int PS4_SYSV_ABI sceKernelWaitEventFlag(OrbisKernelEventFlag ef, u64 bitPattern, u32 waitMode,
                                         u64* pResultPat, OrbisKernelUseconds* pTimeout) {
+    WAIT_STATS_SCOPE("sceKernelWaitEventFlag");
     LOG_DEBUG(Kernel_Event, "called bitPattern = {:#x} waitMode = {:#x}", bitPattern, waitMode);
     if (ef == nullptr) {
         return ORBIS_KERNEL_ERROR_ESRCH;

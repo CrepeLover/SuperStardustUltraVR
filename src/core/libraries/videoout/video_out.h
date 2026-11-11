@@ -129,6 +129,9 @@ s32 PS4_SYSV_ABI sceVideoOutAddFlipEvent(Kernel::OrbisKernelEqueue eq, s32 handl
 s32 PS4_SYSV_ABI sceVideoOutAddVblankEvent(Kernel::OrbisKernelEqueue eq, s32 handle, void* udata);
 s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* const* addresses,
                                             s32 bufferNum, const BufferAttribute* attribute);
+s32 PS4_SYSV_ABI sceVideoOutRegisterStereoBuffers(s32 handle, s32 startIndex,
+                                                  const StereoBuffers* buffers, s32 bufferNum,
+                                                  const BufferAttribute* attribute);
 s32 PS4_SYSV_ABI sceVideoOutGetBufferLabelAddress(s32 handle, uintptr_t* label_addr);
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate);
 s32 PS4_SYSV_ABI sceVideoOutIsFlipPending(s32 handle);

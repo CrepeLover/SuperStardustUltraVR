@@ -17,6 +17,7 @@
 #include "core/vr/headset_fov_cache.h"
 #include "core/vr/vr_host_link.h"
 #include "core/vr/vr_runtime.h"
+#include "input/scripted_input.h"
 #ifdef ENABLE_OPENXR_HOST
 #include "core/vr/openxr_host.h"
 #endif
@@ -153,7 +154,7 @@ FileConfig LoadFileConfig() {
     if (const char* rate = std::getenv("SHADPS4_VR_REFRESH_RATE"); rate != nullptr) {
         result.config.refresh_rate = static_cast<u32>(std::atoi(rate));
     }
-    if (result.config.refresh_rate < 60 || result.config.refresh_rate > 120) {
+    if (result.config.refresh_rate < 60 || result.config.refresh_rate > 240) {
         result.config.refresh_rate = 120;
     }
     // SHADPS4_VR_FOV=<percent>: how much of a PlayStation VR's field of view (100 by 103
@@ -171,6 +172,14 @@ FileConfig LoadFileConfig() {
     if (const char* fov = std::getenv("SHADPS4_VR_FOV"); fov != nullptr && *fov != '\0') {
         result.config.fov_scale =
             std::clamp(static_cast<float>(std::atof(fov)) / 100.0f, 0.5f, 1.2f);
+    }
+    // SHADPS4_VR_WORLD_SIZE=<percent>: how big the world looks, 100 as the title draws it. The
+    // title is given the eye separation and head movement 100/percent times the real ones.
+    if (const char* size = std::getenv("SHADPS4_VR_WORLD_SIZE"); size != nullptr && *size != '\0') {
+        const float percent = static_cast<float>(std::atof(size));
+        if (percent > 0.0f) {
+            result.config.world_scale = 100.0f / std::clamp(percent, 50.0f, 150.0f);
+        }
     }
     const float scale = result.config.fov_scale;
     result.config.fov.tan_out *= scale;
@@ -225,6 +234,11 @@ void Runtime::Configure(bool psvr_supported, bool psvr_required) {
         break;
     case HeadsetMode::Off:
         config.headset_connected = false;
+        // Nothing connects the OpenXR host, which is where an input script starts: start it here.
+        if (const char* script = std::getenv("SHADPS4_INPUT_SCRIPT");
+            script != nullptr && script[0] != '\0') {
+            Input::StartScriptedInput(script);
+        }
         break;
     case HeadsetMode::Auto:
         // Titles that merely support PSVR boot fine flat, so only plug the headset in by
@@ -249,21 +263,30 @@ void Runtime::Configure(bool psvr_supported, bool psvr_required) {
 #endif
     LOG_INFO(Core_Vr,
              "Virtual headset {} (title supports PSVR: {}, requires PSVR: {}), refresh {} Hz, "
-             "ipd {:.1f} mm, demo motion {}",
+             "ipd {:.1f} mm, demo motion {}, world size {:.0f}%",
              config.headset_connected ? "connected" : "not connected", psvr_supported,
-             psvr_required, config.refresh_rate, config.ipd * 1000.0f, config.demo_motion);
+             psvr_required, config.refresh_rate, config.ipd * 1000.0f, config.demo_motion,
+             100.0f / config.world_scale);
 }
 
 Vec3 Runtime::PositionToTracker(const Vec3& host) const {
     const Vec3 seated = Rotate(Conjugate(seat_yaw), {host.x - seat_position.x,
                                                      host.y - seat_position.y,
                                                      host.z - seat_position.z});
-    return {seated.x + config.origin_offset.x, seated.y + config.origin_offset.y,
-            seated.z + config.origin_offset.z};
+    // World size: the title's head moves world_scale times as far from the seat as the real one.
+    const float s = config.world_scale;
+    return {seated.x * s + config.origin_offset.x, seated.y * s + config.origin_offset.y,
+            seated.z * s + config.origin_offset.z};
 }
 
 Vec3 Runtime::DirectionToTracker(const Vec3& host) const {
     return Rotate(Conjugate(seat_yaw), host);
+}
+
+Vec3 Runtime::VelocityToTracker(const Vec3& host) const {
+    const Vec3 v = DirectionToTracker(host);
+    const float s = config.world_scale;
+    return {v.x * s, v.y * s, v.z * s};
 }
 
 void Runtime::PlaceHead() {
@@ -271,7 +294,7 @@ void Runtime::PlaceHead() {
     head = host_head;
     head.pose.position = PositionToTracker(host_head.pose.position);
     head.pose.orientation = Normalize(Multiply(Conjugate(seat_yaw), host_head.pose.orientation));
-    head.linear_velocity = DirectionToTracker(host_head.linear_velocity);
+    head.linear_velocity = VelocityToTracker(host_head.linear_velocity);
     head.angular_velocity = DirectionToTracker(host_head.angular_velocity);
     head.sequence = sequence;
     head.tracked = true;
@@ -301,6 +324,7 @@ void Runtime::RecenterSeatLocked() {
     seat_yaw = yaw;
     seat_valid = true;
     view_turn = 0.0f;
+    recenters.fetch_add(1, std::memory_order_relaxed);
     PlaceHead();
     // Where the controller was seen is of the old seat; the host says where it is every frame.
     pad_seen = false;
@@ -435,7 +459,7 @@ void Runtime::UpdatePad(const DeviceState& host_state) {
     pad = host_state;
     pad.pose.position = PositionToTracker(host_state.pose.position);
     pad.pose.orientation = Normalize(Multiply(Conjugate(seat_yaw), host_state.pose.orientation));
-    pad.linear_velocity = DirectionToTracker(host_state.linear_velocity);
+    pad.linear_velocity = VelocityToTracker(host_state.linear_velocity);
     pad.angular_velocity = DirectionToTracker(host_state.angular_velocity);
     pad.sequence = sequence;
     pad.tracked = true;
@@ -649,7 +673,7 @@ void Runtime::PollViewGestures() {
 void Runtime::UpdatePadPosition(const Vec3& host_position, const Vec3& linear_velocity) {
     std::scoped_lock lock{mutex};
     pad_seen_position = PositionToTracker(host_position);
-    pad_seen_velocity = DirectionToTracker(linear_velocity);
+    pad_seen_velocity = VelocityToTracker(linear_velocity);
     pad_seen = true;
     pad_seen_time = std::chrono::steady_clock::now();
 }
@@ -954,7 +978,7 @@ void Runtime::UpdateMove(u32 hand, const MoveState& state) {
     auto& device = moves[hand].device;
     device.pose.position = PositionToTracker(state.device.pose.position);
     device.pose.orientation = Normalize(Multiply(Conjugate(seat_yaw), state.device.pose.orientation));
-    device.linear_velocity = DirectionToTracker(state.device.linear_velocity);
+    device.linear_velocity = VelocityToTracker(state.device.linear_velocity);
     device.angular_velocity = DirectionToTracker(state.device.angular_velocity);
     device.sequence = sequence;
 }
@@ -1073,10 +1097,11 @@ DeviceState Runtime::GetPad() {
 
 Pose Runtime::ToHostSpace(const Pose& tracker_pose) const {
     std::scoped_lock lock{mutex};
+    const float s = config.world_scale; // undone: the headset gets the real head position
     const auto from_seat = [&](const Vec3& position, const Quat& yaw) {
-        const Vec3 seated = Rotate(yaw, {tracker_pose.position.x - config.origin_offset.x,
-                                         tracker_pose.position.y - config.origin_offset.y,
-                                         tracker_pose.position.z - config.origin_offset.z});
+        const Vec3 seated = Rotate(yaw, {(tracker_pose.position.x - config.origin_offset.x) / s,
+                                         (tracker_pose.position.y - config.origin_offset.y) / s,
+                                         (tracker_pose.position.z - config.origin_offset.z) / s});
         Pose pose;
         pose.position = {seated.x + position.x, seated.y + position.y, seated.z + position.z};
         pose.orientation = Normalize(Multiply(yaw, tracker_pose.orientation));

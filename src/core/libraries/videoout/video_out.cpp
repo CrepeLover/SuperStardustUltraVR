@@ -144,6 +144,23 @@ s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* co
     return driver->RegisterBuffers(port, startIndex, addresses, bufferNum, attribute);
 }
 
+s32 PS4_SYSV_ABI sceVideoOutRegisterStereoBuffers(s32 handle, s32 startIndex,
+                                                  const StereoBuffers* buffers, s32 bufferNum,
+                                                  const BufferAttribute* attribute) {
+    if (!buffers || !attribute) {
+        LOG_ERROR(Lib_VideoOut, "Buffers are null");
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
+    }
+
+    auto* port = driver->GetPort(handle);
+    if (!port || !port->is_open) {
+        LOG_ERROR(Lib_VideoOut, "Invalid handle = {}", handle);
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+
+    return driver->RegisterStereoBuffers(port, startIndex, buffers, bufferNum, attribute);
+}
+
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
     LOG_TRACE(Lib_VideoOut, "called");
     driver->GetPort(handle)->flip_rate = rate;
@@ -527,6 +544,8 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("SbU3dwp80lQ", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetFlipStatus);
     LIB_FUNCTION("U46NwOiJpys", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutSubmitFlip);
     LIB_FUNCTION("w3BY+tAEiQY", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutRegisterBuffers);
+    LIB_FUNCTION("lCTCOogRbk0", "libSceVideoOut", 1, "libSceVideoOut",
+                 sceVideoOutRegisterStereoBuffers);
     LIB_FUNCTION("HXzjK9yI30k", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutAddFlipEvent);
     LIB_FUNCTION("Xru92wHJRmg", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutAddVblankEvent);
     LIB_FUNCTION("CBiu4mCE1DA", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutSetFlipRate);

@@ -8,9 +8,23 @@
 #include "core/libraries/avplayer/avplayer_state.h"
 #include "core/libraries/kernel/process.h"
 
+#include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 
 namespace Libraries::AvPlayer {
+
+// SHADPS4_AVPLAYER_SKIP=1: a video ends the moment it is started, for skipping intros.
+static bool SkipVideos() {
+    static const bool skip = [] {
+        const char* value = std::getenv("SHADPS4_AVPLAYER_SKIP");
+        const bool on = value != nullptr && value[0] == '1';
+        if (on) {
+            LOG_INFO(Lib_AvPlayer, "Videos are skipped (SHADPS4_AVPLAYER_SKIP=1)");
+        }
+        return on;
+    }();
+    return skip;
+}
 
 void PS4_SYSV_ABI AvPlayerState::AutoPlayEventCallback(void* opaque, AvPlayerEvents event_id,
                                                        s32 source_id, void* event_data) {
@@ -186,6 +200,11 @@ bool AvPlayerState::Start() {
         }
         SetState(AvState::Play);
         OnPlaybackStateChanged(AvState::Play);
+        if (SkipVideos() && m_up_source->Stop() && SetState(AvState::Stop)) {
+            // The end of the file, as the title would see it a video later.
+            m_eof_stop_event_sent = true;
+            OnPlaybackStateChanged(AvState::Stop);
+        }
         return true;
     }
 

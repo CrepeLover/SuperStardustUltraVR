@@ -3,7 +3,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 
 #include "common/assert.h"
@@ -27,6 +31,49 @@ static constexpr std::array LogicalStageToStageBit = {
     vk::ShaderStageFlagBits::eGeometry,
     vk::ShaderStageFlagBits::eCompute,
 };
+
+// Debugging which draw shows what: SHADPS4_DEBUG_HIGHLIGHT=<hash>[:<channels>][,...] (hex shader
+// hashes as the pass log prints them with SHADPS4_LOG_PASSES_SHADERS=1) has the pipelines using one
+// of those shaders set every pixel they draw (logic op SET; the rasterizer's colour write mask picks
+// the channels). strtoull stops at the ':'.
+static std::vector<u64> HashesFromEnv(const char* name) {
+    std::vector<u64> list;
+    const char* value = std::getenv(name);
+    std::string_view text{value != nullptr ? value : ""};
+    while (!text.empty()) {
+        const size_t comma = text.find(',');
+        const std::string item{text.substr(0, comma)};
+        if (!item.empty()) {
+            list.push_back(std::strtoull(item.c_str(), nullptr, 16));
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        text.remove_prefix(comma + 1);
+    }
+    return list;
+}
+
+static bool UsesAny(const GraphicsPipelineKey& key, const std::vector<u64>& hashes) {
+    for (const auto hash : key.stage_hashes) {
+        if (hash != 0 && std::find(hashes.begin(), hashes.end(), u64(hash)) != hashes.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool DebugHighlighted(const GraphicsPipelineKey& key) {
+    static const std::vector<u64> hashes = HashesFromEnv("SHADPS4_DEBUG_HIGHLIGHT");
+    return !hashes.empty() && UsesAny(key, hashes);
+}
+
+// SHADPS4_DEBUG_NOALPHA=<hash>[,...]: those pipelines blend as if their source alpha were 1, to
+// tell a draw whose colour comes out black from one whose alpha comes out 0.
+static bool DebugNoAlpha(const GraphicsPipelineKey& key) {
+    static const std::vector<u64> hashes = HashesFromEnv("SHADPS4_DEBUG_NOALPHA");
+    return !hashes.empty() && UsesAny(key, hashes);
+}
 
 GraphicsPipeline::GraphicsPipeline(
     const Instance& instance, Scheduler& scheduler, DescriptorHeap& desc_heap,
@@ -395,6 +442,19 @@ vk::UniquePipeline GraphicsPipeline::Compile(
         }
 
         auto& attachment = attachments[i];
+        if (DebugNoAlpha(key)) {
+            const auto no_alpha = [](vk::BlendFactor& factor) {
+                if (factor == vk::BlendFactor::eSrcAlpha) {
+                    factor = vk::BlendFactor::eOne;
+                } else if (factor == vk::BlendFactor::eOneMinusSrcAlpha) {
+                    factor = vk::BlendFactor::eZero;
+                }
+            };
+            no_alpha(attachment.srcColorBlendFactor);
+            no_alpha(attachment.dstColorBlendFactor);
+            LOG_INFO(Render_Vulkan, "SHADPS4_DEBUG_NOALPHA: pipeline {} attachment {}", debug_str,
+                     i);
+        }
         LiverpoolToVK::NormalizeMinMaxBlend(attachment.colorBlendOp, attachment.srcColorBlendFactor,
                                             attachment.dstColorBlendFactor,
                                             key.color_buffers[i].num_format);
@@ -419,10 +479,15 @@ vk::UniquePipeline GraphicsPipeline::Compile(
         }
     }
 
+    const bool highlighted = instance.IsLogicOpSupported() && DebugHighlighted(key);
+    if (highlighted) {
+        LOG_INFO(Render_Vulkan, "SHADPS4_DEBUG_HIGHLIGHT: pipeline {} painted", debug_str);
+    }
     const vk::PipelineColorBlendStateCreateInfo color_blending = {
         .logicOpEnable =
-            instance.IsLogicOpSupported() && key.logic_op != AmdGpu::ColorControl::LogicOp::Copy,
-        .logicOp = LiverpoolToVK::LogicOp(key.logic_op),
+            highlighted ||
+            (instance.IsLogicOpSupported() && key.logic_op != AmdGpu::ColorControl::LogicOp::Copy),
+        .logicOp = highlighted ? vk::LogicOp::eSet : LiverpoolToVK::LogicOp(key.logic_op),
         .attachmentCount = key.num_color_attachments,
         .pAttachments = attachments.data(),
         .blendConstants = std::array{1.0f, 1.0f, 1.0f, 1.0f},

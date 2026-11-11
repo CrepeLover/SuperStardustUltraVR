@@ -3,6 +3,7 @@
 
 #include <limits>
 #include <cstdlib>
+#include <string_view>
 #include <set>
 #include <tuple>
 #include <chrono>
@@ -959,6 +960,18 @@ void TextureCache::RegisterImage(ImageId image_id) {
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
+    // SHADPS4_LOG_IMAGES=1: one line per image the title creates (size, format, samples, address),
+    // to see at what size a title really draws when its final targets are resized.
+    static const bool log_images = [] {
+        const char* value = std::getenv("SHADPS4_LOG_IMAGES");
+        return value != nullptr && std::string_view{value} == "1";
+    }();
+    if (log_images) {
+        LOG_INFO(Render_Vulkan, "New image {}x{}x{} mips {} layers {} samples {} {} at {:#x}",
+                 image.info.size.width, image.info.size.height, image.info.size.depth,
+                 image.info.resources.levels, image.info.resources.layers, image.info.num_samples,
+                 vk::to_string(image.info.pixel_format), image.info.guest_address);
+    }
     total_used_memory += Common::AlignUp(image.info.guest_size, 1024);
     image_lru_cache.Insert(image, gc_tick);
     const auto& info = image.info;

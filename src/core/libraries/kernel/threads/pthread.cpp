@@ -23,6 +23,7 @@
 #include "core/libraries/libs.h"
 #include "core/memory.h"
 #include "core/signals.h"
+#include "core/libraries/kernel/wait_stats.h"
 
 #if defined(ARCH_X86_64) || defined(__arm64__) || defined(__aarch64__)
 extern "C" void* PS4_SYSV_ABI _runOnAnotherStack(void* arg, void* func,
@@ -212,6 +213,7 @@ static int JoinThread(PthreadT pthread, void** thread_return, const OrbisKernelT
 }
 
 int PS4_SYSV_ABI posix_pthread_join(PthreadT pthread, void** thread_return) {
+    WAIT_STATS_SCOPE("pthread_join");
     return JoinThread(pthread, thread_return, nullptr);
 }
 

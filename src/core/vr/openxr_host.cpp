@@ -59,6 +59,11 @@ constexpr u32 NumCommandBuffers = 4;
 /// Pictures smaller than this, either way, are a title's way of showing nothing.
 constexpr u32 MinFrameSize = 64;
 
+/// Steam Frame controllers (SteamVR): a gamepad split in two, with a D-pad and View on the
+/// left, A/B/X/Y and Menu on the right, and a bumper, trigger and grip on each.
+constexpr const char* FrameControllerExtension = "XR_VALVE_frame_controller_interaction";
+constexpr const char* FrameControllerProfile = "/interaction_profiles/valve/frame_controller_valve";
+
 /// What runtimes for Windows are known to want of a Vulkan device they share images with. It is
 /// enabled whenever a runtime is there, so that a headset that turns up after the renderer has
 /// made its device (the player starts the game first and puts the headset on then) can still be
@@ -444,6 +449,21 @@ struct OpenXrHost::Impl {
     XrAction act_pose{XR_NULL_HANDLE};
     XrAction act_grip{XR_NULL_HANDLE};
     XrAction act_rumble{XR_NULL_HANDLE};
+    // Bound for Steam Frame controllers only: their D-pad, bumpers (L1/R1) and View button
+    // (the touchpad click). Inactive on other controllers.
+    XrAction act_dpad_up{XR_NULL_HANDLE};
+    XrAction act_dpad_down{XR_NULL_HANDLE};
+    XrAction act_dpad_left{XR_NULL_HANDLE};
+    XrAction act_dpad_right{XR_NULL_HANDLE};
+    XrAction act_bumper_l{XR_NULL_HANDLE};
+    XrAction act_bumper_r{XR_NULL_HANDLE};
+    XrAction act_touchpad_click{XR_NULL_HANDLE};
+    bool has_frame_controllers{};
+    XrPath frame_profile{XR_NULL_PATH};
+    // The Steam Frame profile is the one in use (it has a face button for every DualShock
+    // one, so the Touch-only swaps are off).
+    bool frame_active{};
+    bool profile_changed{true};
     XrPath hand_paths[2]{XR_NULL_PATH, XR_NULL_PATH};
     XrSpace controller_space{XR_NULL_HANDLE};
     // Where each hand holds something, as far as the headset's runtime says where its own
@@ -544,6 +564,7 @@ struct OpenXrHost::Impl {
         };
         hand_extension = track_hands && enable_if_offered(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
         has_refresh_rate = enable_if_offered(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+        has_frame_controllers = enable_if_offered(FrameControllerExtension);
         has_audio_guid = enable_if_offered(XR_OCULUS_AUDIO_DEVICE_GUID_EXTENSION_NAME);
 
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
@@ -960,6 +981,19 @@ struct OpenXrHost::Impl {
         made = made && make(act_grip, "hands", "Hands", XR_ACTION_TYPE_POSE_INPUT, true);
         made = made &&
                make(act_rumble, "rumble", "Rumble", XR_ACTION_TYPE_VIBRATION_OUTPUT, true);
+        made = made && make(act_dpad_up, "dpad_up", "D-pad up", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made &&
+               make(act_dpad_down, "dpad_down", "D-pad down", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made &&
+               make(act_dpad_left, "dpad_left", "D-pad left", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made &&
+               make(act_dpad_right, "dpad_right", "D-pad right", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made && make(act_bumper_l, "l1_bumper", "L1 (bumper)", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made && make(act_bumper_r, "r1_bumper", "R1 (bumper)", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        made = made && make(act_touchpad_click, "touchpad_click", "Touchpad click",
+                            XR_ACTION_TYPE_BOOLEAN_INPUT);
+        profile_changed = true;
+        frame_active = false;
         if (!made) {
             LOG_WARNING(Core_Vr, "The headset's controllers could not be set up as a gamepad");
             return;
@@ -1007,6 +1041,82 @@ struct OpenXrHost::Impl {
                 XR_FAILED(result)) {
                 LOG_WARNING(Core_Vr, "The headset's runtime takes no {} controller bindings: {}",
                             index ? "Index" : "Touch", ResultText(instance, result));
+            }
+        }
+        // Steam Frame controllers, bound where a DualShock has its buttons: A/B/X/Y are
+        // Cross/Circle/Square/Triangle, the D-pad is the D-pad, bumpers are L1/R1, triggers
+        // L2/R2, Menu is OPTIONS and View clicks the touchpad. Sticks and grips keep their
+        // Touch meanings. Without these SteamVR passes the Frame on as a Touch controller.
+        if (has_frame_controllers &&
+            XR_SUCCEEDED(xrStringToPath(instance, FrameControllerProfile, &frame_profile))) {
+            std::vector<XrActionSuggestedBinding> bindings;
+            std::vector<const char*> names;
+            const auto bind = [&](XrAction action, const char* path) {
+                XrPath binding = XR_NULL_PATH;
+                if (XR_SUCCEEDED(xrStringToPath(instance, path, &binding))) {
+                    bindings.push_back({action, binding});
+                    names.push_back(path);
+                }
+            };
+            bind(act_move, "/user/hand/left/input/thumbstick");
+            bind(act_finger, "/user/hand/right/input/thumbstick");
+            bind(act_finger_press, "/user/hand/right/input/thumbstick/click");
+            bind(act_l3, "/user/hand/left/input/thumbstick/click");
+            bind(act_cross, "/user/hand/right/input/a/click");
+            bind(act_circle, "/user/hand/right/input/b/click");
+            bind(act_square, "/user/hand/right/input/x/click");
+            bind(act_triangle, "/user/hand/right/input/y/click");
+            bind(act_dpad_up, "/user/hand/left/input/dpad_up/click");
+            bind(act_dpad_down, "/user/hand/left/input/dpad_down/click");
+            bind(act_dpad_left, "/user/hand/left/input/dpad_left/click");
+            bind(act_dpad_right, "/user/hand/left/input/dpad_right/click");
+            bind(act_l1, "/user/hand/left/input/squeeze/value");
+            bind(act_r1, "/user/hand/right/input/squeeze/value");
+            bind(act_bumper_l, "/user/hand/left/input/bumper/click");
+            bind(act_bumper_r, "/user/hand/right/input/bumper/click");
+            bind(act_l2, "/user/hand/left/input/trigger/value");
+            bind(act_r2, "/user/hand/right/input/trigger/value");
+            bind(act_options, "/user/hand/right/input/menu/click");
+            bind(act_touchpad_click, "/user/hand/left/input/view/click");
+            bind(act_pose, pad_hand == 0 ? "/user/hand/left/input/aim/pose"
+                                         : "/user/hand/right/input/aim/pose");
+            bind(act_grip, "/user/hand/left/input/grip/pose");
+            bind(act_grip, "/user/hand/right/input/grip/pose");
+            bind(act_rumble, "/user/hand/left/output/haptic");
+            bind(act_rumble, "/user/hand/right/output/haptic");
+            XrInteractionProfileSuggestedBinding suggested{
+                XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+            suggested.interactionProfile = frame_profile;
+            const auto suggest = [&](const std::vector<XrActionSuggestedBinding>& list) {
+                suggested.countSuggestedBindings = static_cast<uint32_t>(list.size());
+                suggested.suggestedBindings = list.data();
+                return xrSuggestInteractionProfileBindings(instance, &suggested);
+            };
+            XrResult result = suggest(bindings);
+            if (XR_FAILED(result)) {
+                // One path the runtime does not know fails the lot: keep those it takes (the
+                // last suggestion for a profile is the one that counts).
+                std::vector<XrActionSuggestedBinding> taken;
+                for (std::size_t i = 0; i < bindings.size(); ++i) {
+                    if (XR_SUCCEEDED(suggest(std::vector<XrActionSuggestedBinding>{bindings[i]}))) {
+                        taken.push_back(bindings[i]);
+                    } else {
+                        LOG_WARNING(Core_Vr, "Steam Frame controller binding refused: {}",
+                                    names[i]);
+                    }
+                }
+                if (!taken.empty()) {
+                    result = suggest(taken);
+                }
+            }
+            if (XR_FAILED(result)) {
+                frame_profile = XR_NULL_PATH;
+                LOG_WARNING(Core_Vr,
+                            "The headset's runtime takes no Steam Frame controller bindings "
+                            "({}); it maps those controllers as Touch controllers",
+                            ResultText(instance, result));
+            } else {
+                LOG_INFO(Core_Vr, "Steam Frame controller bindings suggested");
             }
         }
 
@@ -1083,6 +1193,20 @@ struct OpenXrHost::Impl {
             return;
         }
         actions_synced = true;
+        if (profile_changed) {
+            profile_changed = false;
+            bool frame = false;
+            for (int hand = 0; hand < 2 && frame_profile != XR_NULL_PATH; ++hand) {
+                XrInteractionProfileState current{XR_TYPE_INTERACTION_PROFILE_STATE};
+                frame = frame || (XR_SUCCEEDED(xrGetCurrentInteractionProfile(
+                                      session, hand_paths[hand], &current)) &&
+                                  current.interactionProfile == frame_profile);
+            }
+            if (frame != frame_active) {
+                frame_active = frame;
+                LOG_INFO(Core_Vr, "Steam Frame controllers {}", frame ? "in use" : "not in use");
+            }
+        }
         if (!use_controllers) {
             // Only where they are is of interest (see UpdatePad).
             return;
@@ -1181,11 +1305,30 @@ struct OpenXrHost::Impl {
         const bool circle = pressed(act_circle);
         const bool triangle = pressed(act_triangle);
         const bool blow = !gamepad_layout && circle && triangle;
-        if (!gamepad_layout || !swap_circle_r3) {
+        // The Steam Frame has Circle on B under the right thumb and its own right stick click
+        // for R3, which is what swapping Circle and R3 makes up for on Touch controllers.
+        const bool swap_circle_r3_now = swap_circle_r3 && !frame_active;
+        if (!gamepad_layout || !swap_circle_r3_now) {
             add(circle && !blow, Buttons::Circle);
         }
         add(triangle && !blow, Buttons::Triangle);
         add(pressed(act_options), Buttons::Options);
+        // Steam Frame only (inactive elsewhere): D-pad, bumpers as L1/R1, View as the touchpad
+        // click.
+        const bool dpad_up = pressed(act_dpad_up);
+        const bool dpad_down = pressed(act_dpad_down);
+        const bool dpad_left = pressed(act_dpad_left);
+        const bool dpad_right = pressed(act_dpad_right);
+        add(dpad_up, Buttons::Up);
+        add(dpad_down, Buttons::Down);
+        add(dpad_left, Buttons::Left);
+        add(dpad_right, Buttons::Right);
+        const bool left_bumper = pressed(act_bumper_l);
+        const bool right_bumper = pressed(act_bumper_r);
+        add(left_bumper, Buttons::L1);
+        add(right_bumper, Buttons::R1);
+        const bool touchpad_click = pressed(act_touchpad_click);
+        add(touchpad_click, Buttons::TouchPad);
         const bool left_stick_in = pressed(act_l3);
         const bool right_stick_in = pressed(act_finger_press);
         const float left_grip = std::max(pulled(act_l1), pad_hand == 0 ? 0.0f : test_grip);
@@ -1207,9 +1350,11 @@ struct OpenXrHost::Impl {
             const float grip = left ? left_grip : right_grip;
             sample.trigger = static_cast<u16>(std::clamp(trigger, 0.0f, 1.0f) * 255.0f);
             sample.buttons = (trigger > 0.5f ? 0x02 : 0) | (grip > 0.5f ? 0x04 : 0);
-            // Lower face button = Cross, upper = Circle on each independent Move.
-            if (left ? circle : pressed(act_cross)) sample.buttons |= 0x40;
-            if (left ? triangle : pressed(act_square)) sample.buttons |= 0x20;
+            // Lower face button = Cross, upper = Circle on each independent Move. (On a Steam
+            // Frame the left hand's are its D-pad down/up and the right's upper one is B.)
+            if (left ? (frame_active ? dpad_down : circle) : pressed(act_cross)) sample.buttons |= 0x40;
+            if (left ? (frame_active ? dpad_up : triangle)
+                     : (frame_active ? circle : pressed(act_square))) sample.buttons |= 0x20;
             if (left ? left_stick_in : right_stick_in) sample.buttons |= 0x80;
             if (left && pressed(act_options)) sample.buttons |= 0x08;
             const auto move_stick = stick(left ? act_move : act_finger);
@@ -1278,7 +1423,10 @@ struct OpenXrHost::Impl {
                            (True(buttons & Buttons::Square) ? 2u : 0u) | (circle ? 4u : 0u) |
                            (triangle ? 8u : 0u) | (left_stick_in ? 16u : 0u) |
                            (right_stick_in ? 32u : 0u) | (pushed(move) ? 64u : 0u) |
-                           (pushed(finger) ? 128u : 0u);
+                           (pushed(finger) ? 128u : 0u) |
+                           (dpad_up || dpad_down || dpad_left || dpad_right ? 256u : 0u) |
+                           (left_bumper || right_bumper ? 512u : 0u) |
+                           (touchpad_click ? 1024u : 0u);
         const bool used = (in_use & ~controllers_in_use) != 0;
         controllers_in_use = in_use;
         if (!Input::FirstPadSource().Update(seconds, gamepad, used)) {
@@ -1294,7 +1442,15 @@ struct OpenXrHost::Impl {
         if (!controllers_used) {
             controllers_used = true;
             controller->SetHeadsetPlays(true);
-            if (gamepad_layout) {
+            if (frame_active) {
+                LOG_INFO(Core_Vr,
+                         "Steam Frame layout: A/B/X/Y = Cross/Circle/Square/Triangle, D-pad = "
+                         "D-pad, bumpers = L1/R1, grips = {}, triggers = L2/R2, Menu = OPTIONS, "
+                         "View = touchpad click, right stick pressed in = {}; {} hand aims",
+                         gamepad_layout ? (swap_pad_grips ? "R1/L1" : "L1/R1")
+                                        : "L1/R1 and touchpad gestures",
+                         gamepad_layout ? "R3" : "touchpad press", pad_hand == 0 ? "left" : "right");
+            } else if (gamepad_layout) {
                 LOG_INFO(Core_Vr,
                          "VR gamepad layout: left stick moves, right stick turns, "
                          "right A/B = Cross/Square, left X/Y = Circle/Triangle, "
@@ -1340,7 +1496,7 @@ struct OpenXrHost::Impl {
             left_click_held = left_stick_in;
         }
         add(!view_reset && (toggle_left_click ? left_click_latched : left_stick_in), Buttons::L3);
-        if (gamepad_layout && swap_circle_r3) {
+        if (gamepad_layout && swap_circle_r3_now) {
             add(right_stick_in && !view_reset, Buttons::Circle);
             add(circle && !view_reset, Buttons::R3);
         } else {
@@ -1405,9 +1561,13 @@ struct OpenXrHost::Impl {
             dragged = stick_finger.Update(seconds, finger.x, -finger.y);
         }
         const bool swiping = made.down || dragged.down;
-        const bool touch = !gamepad_layout && (swiping || (right_stick_in && !view_reset));
-        const float touch_x = made.down ? made.x : dragged.down ? dragged.x : 0.5f;
-        const float touch_y = made.down ? made.y : dragged.down ? dragged.y : 0.5f;
+        // (A touchpad cannot be clicked without touching it, so View touches its middle.)
+        const bool touch =
+            (!gamepad_layout && (swiping || (right_stick_in && !view_reset))) || touchpad_click;
+        // (With the gamepad layout the right stick turns and moves no finger.)
+        const bool finger_dragged = dragged.down && !gamepad_layout;
+        const float touch_x = made.down ? made.x : finger_dragged ? dragged.x : 0.5f;
+        const float touch_y = made.down ? made.y : finger_dragged ? dragged.y : 0.5f;
         if (buttons != sent_buttons || axes != sent_axes || touch != sent_touch ||
             (touch && (std::abs(touch_x - sent_touch_x) > 0.002f ||
                        std::abs(touch_y - sent_touch_y) > 0.002f))) {
@@ -1664,6 +1824,9 @@ struct OpenXrHost::Impl {
                                               state == XR_SESSION_STATE_FOCUSED);
                 break;
             }
+            case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
+                profile_changed = true;
+                break;
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
                 LOG_INFO(Core_Vr, "The headset's runtime is going away");
                 session_lost = true;
@@ -2851,6 +3014,9 @@ bool OpenXrHost::Connect() {
     impl->feed_head = EnvFlag("SHADPS4_XR_HEAD", true);
     // (A script that plays the game is the gamepad: nothing else has a say then.)
     const char* script = std::getenv("SHADPS4_INPUT_SCRIPT");
+    if (script != nullptr && script[0] != '\0') {
+        Input::StartScriptedInput(script);
+    }
     impl->use_controllers =
         EnvFlag("SHADPS4_XR_CONTROLLERS", script == nullptr || script[0] == '\0');
     impl->use_grips = impl->track_hands && EnvFlag("SHADPS4_XR_GRIPS", true);

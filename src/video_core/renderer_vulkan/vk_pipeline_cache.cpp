@@ -220,6 +220,16 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
               !regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Local))) ||
              lowers_user_clip_planes) &&
             profile.needs_clip_distance_emulation;
+        // Points reach the rasterizer from the draw itself, or from a geometry shader that emits
+        // them (tessellation is left out: it emits triangles here).
+        if (regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Geometry))) {
+            info.hw.fs.point_primitive = regs.vgt_gs_out_prim_type.GetPrimitiveType(0) ==
+                                         AmdGpu::GsOutputPrimitiveType::PointList;
+        } else {
+            info.hw.fs.point_primitive =
+                !regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Hull)) &&
+                regs.primitive_type == AmdGpu::PrimitiveType::PointList;
+        }
         break;
     }
     case HwStage::Compute: {

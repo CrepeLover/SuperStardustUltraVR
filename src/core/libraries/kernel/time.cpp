@@ -12,6 +12,7 @@
 #include "core/libraries/kernel/posix_error.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/kernel/wait_stats.h"
 
 #ifdef _WIN64
 #include <windows.h>
@@ -75,10 +76,12 @@ static s32 posix_nanosleep_impl(const OrbisKernelTimespec* rqtp, OrbisKernelTime
 }
 
 s32 PS4_SYSV_ABI posix_nanosleep(const OrbisKernelTimespec* rqtp, OrbisKernelTimespec* rmtp) {
+    WAIT_STATS_SCOPE("nanosleep");
     return posix_nanosleep_impl(rqtp, rmtp, true);
 }
 
 s32 PS4_SYSV_ABI sceKernelNanosleep(const OrbisKernelTimespec* rqtp, OrbisKernelTimespec* rmtp) {
+    WAIT_STATS_SCOPE("sceKernelNanosleep");
     if (const auto ret = posix_nanosleep_impl(rqtp, rmtp, false); ret < 0) {
         return ErrnoToSceKernelError(*__Error());
     }
@@ -86,6 +89,7 @@ s32 PS4_SYSV_ABI sceKernelNanosleep(const OrbisKernelTimespec* rqtp, OrbisKernel
 }
 
 s32 PS4_SYSV_ABI posix_usleep(u32 microseconds) {
+    WAIT_STATS_SCOPE("usleep");
     const OrbisKernelTimespec ts = {
         .tv_sec = microseconds / 1'000'000,
         .tv_nsec = (microseconds % 1'000'000) * 1'000,
@@ -94,6 +98,7 @@ s32 PS4_SYSV_ABI posix_usleep(u32 microseconds) {
 }
 
 s32 PS4_SYSV_ABI sceKernelUsleep(u32 microseconds) {
+    WAIT_STATS_SCOPE("sceKernelUsleep");
     const OrbisKernelTimespec ts = {
         .tv_sec = microseconds / 1'000'000,
         .tv_nsec = (microseconds % 1'000'000) * 1'000,
@@ -102,6 +107,7 @@ s32 PS4_SYSV_ABI sceKernelUsleep(u32 microseconds) {
 }
 
 u32 PS4_SYSV_ABI posix_sleep(u32 seconds) {
+    WAIT_STATS_SCOPE("sleep");
     const OrbisKernelTimespec ts = {
         .tv_sec = seconds,
         .tv_nsec = 0,
@@ -114,6 +120,7 @@ u32 PS4_SYSV_ABI posix_sleep(u32 seconds) {
 }
 
 s32 PS4_SYSV_ABI sceKernelSleep(u32 seconds) {
+    WAIT_STATS_SCOPE("sceKernelSleep");
     return sceKernelUsleep(seconds * 1'000'000);
 }
 

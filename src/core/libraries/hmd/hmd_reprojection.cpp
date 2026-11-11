@@ -5,6 +5,7 @@
 #include <cmath>
 #include <mutex>
 #include "common/elf_info.h"
+#include "common/farpoint_title.h"
 #include "core/vr/stereo_layout.h"
 
 #include "common/logging/log.h"
@@ -25,13 +26,16 @@ struct UserEvent {
     s32 id{};
     bool is_set{};
 
-    void Trigger() const {
+    /// True when the title had the event registered, so that the trigger reached it.
+    bool Trigger() const {
         if (!is_set) {
-            return;
+            return false;
         }
         if (auto* equeue = Libraries::Kernel::GetEqueue(eq); equeue != nullptr) {
-            equeue->TriggerEvent(id, Libraries::Kernel::OrbisKernelEvent::Filter::User, nullptr);
+            return equeue->TriggerEvent(id, Libraries::Kernel::OrbisKernelEvent::Filter::User,
+                                        nullptr);
         }
+        return false;
     }
 };
 
@@ -74,8 +78,32 @@ void OnVblank() {
         start_event = g_reprojection.start_event;
         end_event = g_reprojection.end_event;
     }
-    start_event.Trigger();
-    end_event.Trigger();
+    const bool started = start_event.Trigger();
+    const bool ended = end_event.Trigger();
+
+    // How often the headset refreshes for the title, and how many of those refreshes the title
+    // was waiting for (had its start / end event registered), now and then.
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point report_time = Clock::now();
+    static u32 refreshes = 0;
+    static u32 starts_delivered = 0;
+    static u32 ends_delivered = 0;
+    ++refreshes;
+    starts_delivered += started ? 1 : 0;
+    ends_delivered += ended ? 1 : 0;
+    const auto now = Clock::now();
+    if (now - report_time >= std::chrono::seconds{10}) {
+        const float seconds = std::chrono::duration<float>(now - report_time).count();
+        LOG_INFO(Lib_Hmd,
+                 "Headset refreshes for the title: {:.1f} per second; the title waited for the "
+                 "reprojection start event at {:.1f} and the end event at {:.1f} of them per "
+                 "second",
+                 refreshes / seconds, starts_delivered / seconds, ends_delivered / seconds);
+        report_time = now;
+        refreshes = 0;
+        starts_delivered = 0;
+        ends_delivered = 0;
+    }
 }
 
 s32 PS4_SYSV_ABI sceHmdReprojectionStartMultilayer(
@@ -83,7 +111,7 @@ s32 PS4_SYSV_ABI sceHmdReprojectionStartMultilayer(
     const OrbisHmdReprojectionTrackerState* tracker_state, s64 flip_arg, s32 option) {
     if (!layers || !tracker_state)
         return ORBIS_HMD_ERROR_PARAMETER_NULL;
-    if (Common::ElfInfo::Instance().GameSerial() != "CUSA04508" || layer_count != 1) {
+    if (!Common::IsFarpointSerial(Common::ElfInfo::Instance().GameSerial()) || layer_count != 1) {
         static bool reported = false;
         if (!reported) {
             LOG_ERROR(Lib_Hmd,
@@ -254,12 +282,13 @@ static s32 SubmitReprojection(const OrbisHmdReprojectionParam* param,
     std::memcpy(&frame.eye_textures[0], param->texture[0], sizeof(AmdGpu::Image));
     std::memcpy(&frame.eye_textures[1], param->texture[1], sizeof(AmdGpu::Image));
     auto left_uv = param->uv[0];
-    frame.packed_stereo = Common::ElfInfo::Instance().GameSerial() == "CUSA04508" &&
-                          frame.eye_textures[0].Address() == frame.eye_textures[1].Address() &&
+    // One texture named for both eyes holds them side by side (Farpoint does this), and its
+    // UV transforms address the full width.
+    frame.packed_stereo = frame.eye_textures[0].Address() == frame.eye_textures[1].Address() &&
                           frame.eye_textures[0].width > 0;
     if (frame.packed_stereo) {
-        // Farpoint's UV transform addresses the full side-by-side texture. Recover the
-        // projection in coordinates of the left half before computing the eye's FOV.
+        // Recover the projection in coordinates of the left half before computing the eye's
+        // FOV.
         const auto unpacked = Core::Vr::LeftEyeProjectionUv(
             {left_uv.scale_x, left_uv.scale_y, left_uv.offset_x, left_uv.offset_y}, true);
         left_uv = {unpacked[0], unpacked[1], unpacked[2], unpacked[3]};
@@ -325,6 +354,21 @@ static s32 SubmitReprojection(const OrbisHmdReprojectionParam* param,
 
     Core::Vr::GuestFrames::NoteGuestProgress();
 
+    // Frames drawn from the same head pose as the one before (a title that reads the pose less
+    // often than it draws).
+    static decltype(frame.render_pose) last_pose{};
+    static u32 repeated_poses = 0;
+    const auto& pose = frame.render_pose;
+    if (pose.position.x == last_pose.position.x && pose.position.y == last_pose.position.y &&
+        pose.position.z == last_pose.position.z &&
+        pose.orientation.x == last_pose.orientation.x &&
+        pose.orientation.y == last_pose.orientation.y &&
+        pose.orientation.z == last_pose.orientation.z &&
+        pose.orientation.w == last_pose.orientation.w) {
+        ++repeated_poses;
+    }
+    last_pose = pose;
+
     // How fast the title delivers frames is the number that matters for comfort; report it now
     // and then.
     {
@@ -335,8 +379,12 @@ static s32 SubmitReprojection(const OrbisHmdReprojectionParam* param,
         const auto now = Clock::now();
         if (now - report_time >= ReportInterval) {
             const float seconds = std::chrono::duration<float>(now - report_time).count();
-            LOG_INFO(Lib_Hmd, "{} headset frames so far, {:.1f} per second", frame_number,
-                     static_cast<float>(frame_number - report_frame) / seconds);
+            LOG_INFO(Lib_Hmd,
+                     "{} headset frames so far, {:.1f} per second; {} of them drawn from the "
+                     "previous frame's head pose",
+                     frame_number, static_cast<float>(frame_number - report_frame) / seconds,
+                     repeated_poses);
+            repeated_poses = 0;
             report_time = now;
             report_frame = frame_number;
         }

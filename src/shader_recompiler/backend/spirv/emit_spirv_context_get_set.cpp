@@ -76,6 +76,31 @@ Id EmitReadConstBuffer(EmitContext& ctx, u32 handle, Id index) {
 }
 
 Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
+    // A point draw (see HwFragmentRuntimeInfo::point_primitive): the console rasterizes the point
+    // as a sprite whose I/J barycentrics are its sprite coordinate, and all three of its vertices
+    // are the point itself. Vulkan's barycentrics are constant (1, 0, 0) over a point and the
+    // per-vertex values of vertices 1 and 2 undefined, so a game that samples its sprite texture
+    // with I/J drew the texture's corner texel over the whole point (invisible bullets).
+    const bool points =
+        ctx.sw_stage == SwStage::Fragment && ctx.runtime_info.hw.fs.point_primitive;
+    if (points) {
+        index = 0;
+        if (Sirit::ValidId(ctx.point_coord) &&
+            (IR::IsBarycentricCoord(attr) || attr == IR::Attribute::BaryCoordPullModel)) {
+            const auto sprite = [&](u32 axis) {
+                return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.point_coord,
+                                                                ctx.ConstU32(axis)));
+            };
+            if (attr != IR::Attribute::BaryCoordPullModel) {
+                ASSERT_MSG(comp < 2, "Invalid barycentric component {}", comp);
+                return sprite(comp);
+            }
+            // Pull model: I/W, J/W, 1/W.
+            const Id inv_w = ctx.OpLoad(
+                ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.frag_coord, ctx.ConstU32(3U)));
+            return comp == 2 ? inv_w : ctx.OpFMul(ctx.F32[1], sprite(comp), inv_w);
+        }
+    }
     if (IR::IsParam(attr)) {
         const u32 param_index{u32(attr) - u32(IR::Attribute::Param0)};
         const auto& param{ctx.input_params.at(param_index)};

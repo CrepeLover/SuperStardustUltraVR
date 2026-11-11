@@ -22,9 +22,13 @@ namespace Input {
 /// "mic=level" for noise of that loudness in the microphone
 /// (root mean square, 1 is full scale: 0.35 is what a title takes for blowing hard),
 /// "recenter" for the player asking for the view to be reset where the head is at that moment,
-/// "worn=0" / "worn=1" for the headset being taken off and put back on.
+/// "worn=0" / "worn=1" for the headset being taken off and put back on,
+/// "ipd=mm" for the headset reporting its eyes that far apart from then on.
 /// Lines starting with '#' are ignored. Times count from when the script is started.
 void StartScriptedInput(const std::filesystem::path& script);
+
+/// Seconds on the running script's clock (the times in the script), -1 when no script runs.
+double ScriptedInputSeconds();
 
 /// The loudness a running script wants the microphone to hear right now, 0 for none. Also
 /// what a title takes for blowing hard while the player holds the buttons that stand for it

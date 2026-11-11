@@ -60,6 +60,9 @@ struct Step {
     bool recenter{};
     // The headset taken off the head (false) or put back on (true), from this line on.
     std::optional<bool> worn;
+    // The headset reports its eyes this many millimetres apart from this line on (as SteamVR does
+    // when the player changes the IPD).
+    std::optional<float> ipd_mm;
 };
 
 std::vector<float> ParseNumbers(const std::string& text) {
@@ -153,6 +156,10 @@ std::vector<Step> ParseScript(const std::filesystem::path& script) {
                 step.recenter = true;
                 continue;
             }
+            if (token.starts_with("ipd=")) {
+                step.ipd_mm = std::stof(token.substr(4));
+                continue;
+            }
             if (token == "worn=0" || token == "worn=1") {
                 step.worn = token.back() == '1';
                 continue;
@@ -201,9 +208,14 @@ std::vector<Step> ParseScript(const std::filesystem::path& script) {
     return steps;
 }
 
+std::atomic<s64> g_script_begin_ns{0};
+
 void Replay(std::vector<Step> steps, std::filesystem::path live_script) {
     Common::SetCurrentThreadName("shadPS4:ScriptedInput");
     const auto begin = std::chrono::steady_clock::now();
+    g_script_begin_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            begin.time_since_epoch())
+                            .count();
     double last_end = 0.0;
     for (const Step& step : steps) {
         last_end = std::max(last_end, step.end);
@@ -310,6 +322,10 @@ void Replay(std::vector<Step> steps, std::filesystem::path live_script) {
             if (steps[i].place_switch) {
                 vr.SwitchPadPlace();
             }
+            if (steps[i].ipd_mm) {
+                LOG_INFO(Input, "Scripted: the eyes are {:.1f} mm apart", *steps[i].ipd_mm);
+                vr.UpdateOptics(vr.GetConfig().fov, *steps[i].ipd_mm / 1000.0f);
+            }
             if (steps[i].worn) {
                 LOG_INFO(Input, "Scripted: the headset is {}", *steps[i].worn ? "put on"
                                                                               : "taken off");
@@ -374,7 +390,22 @@ void SetBlowing(bool blowing_now) {
     }
 }
 
+double ScriptedInputSeconds() {
+    const s64 begin = g_script_begin_ns.load();
+    if (begin == 0) {
+        return -1.0;
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    return static_cast<double>(now - begin) / 1e9;
+}
+
 void StartScriptedInput(const std::filesystem::path& script) {
+    static std::atomic<bool> started{false};
+    if (started.exchange(true)) {
+        return;
+    }
     auto steps = ParseScript(script);
     if (steps.empty()) {
         LOG_ERROR(Input, "No usable steps in input script {}", script.string());
