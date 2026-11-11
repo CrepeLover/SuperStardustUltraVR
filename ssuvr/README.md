@@ -1,6 +1,6 @@
 # Super Stardust Ultra VR on PC VR
 
-A PC VR port of Super Stardust Ultra VR (CUSA05951, EU 1.03). It runs on shadPS4 with evertec82's Farpoint OpenXR fork (https://github.com/evertec82/Farpoint). The emulator changes are on this branch (`ssuvr`). They're described in the commit "Super Stardust Ultra VR (CUSA05951) on the Farpoint PC VR emulator". shadPS4 main of 2026-11-10 is merged in on top.
+A PC VR port of Super Stardust Ultra VR (CUSA05951, EU 1.03). It runs on shadPS4 with evertec82's Farpoint OpenXR fork (https://github.com/evertec82/Farpoint). The emulator changes are in this repository, described in the commit "Super Stardust Ultra VR (CUSA05951) on the Farpoint PC VR emulator". shadPS4 main of 2026-11-10 is merged in on top. The [README at the root](../README.md) is the overview.
 
 This folder holds the parts that live outside the emulator source:
 
